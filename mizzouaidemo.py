@@ -10,6 +10,9 @@ import csv
 from google import genai
 from google.genai import types
 
+# This adds a logo to the top of the sidebar
+st.sidebar.image("https://brand.missouri.edu/wp-content/uploads/2019/02/university-of-missouri-logo.png")
+
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
 # ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,15 @@
 [theme]
-primaryColor = "#F1B82D"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F1B82D" # This will make the sidebar/uploader Gold
+# Mizzou Gold
+primaryColor = "#F1B82D" 
+
+# Main background (Keep it clean/white)
+backgroundColor = "#FFFFFF" 
+
+# Sidebar and boxes (A very light grey or gold)
+secondaryBackgroundColor = "#E1E1E1" 
+
+# Text (Pure black for readability)
 textColor = "#000000"
+
+# "serif" gives that academic, prestigious University feel
 font = "serif"
