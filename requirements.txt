@@ -1,0 +1,5 @@
+streamlit
+pdfplumber
+requests
+beautifulsoup4
+google-genai

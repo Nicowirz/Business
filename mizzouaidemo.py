@@ -14,8 +14,7 @@ from google.genai import types
 # AI ADVISOR CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 # Replace this with your actual Gemini API Key
-API_KEY = "AIzaSyAIvRxDHOD5TZ81EuKIWHxD7m6ZKbrUNbk"
-
+API_KEY = st.secrets["GEMINI_API_KEY"]
 # ─────────────────────────────────────────────────────────────────
 # CATALOG URL MAP
 # ─────────────────────────────────────────────────────────────────
