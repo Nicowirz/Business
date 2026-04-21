@@ -1,6 +1,6 @@
 [theme]
 primaryColor = "#F1B82D"
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#f0f2f6"
+secondaryBackgroundColor = "#F1B82D" # This will make the sidebar/uploader Gold
 textColor = "#000000"
 font = "serif"
