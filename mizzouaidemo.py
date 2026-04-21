@@ -16,7 +16,7 @@ from google.genai import types
 # Replace this with your actual Gemini API Key
 API_KEY = st.secrets["GEMINI_API_KEY"]
 # ─────────────────────────────────────────────────────────────────
-# CATALOG URL MAP
+# CATALOG URL MAP this is the primary resource for requirements
 # ─────────────────────────────────────────────────────────────────
 CATALOG_URLS = {
     "BUSINESS":         "https://catalog.missouri.edu/collegeofbusiness/businessadministration/bsba-business-administration/",
@@ -29,7 +29,7 @@ CATALOG_URLS = {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# BUILT-IN REQUIREMENTS (2025-26 catalog fallback)
+# BUILT-IN REQUIREMENTS (2025-26 catalog fallback) if url fails or major not found it will fall back to these hardcoded requirements (which are simplified and may not be fully accurate)
 # ─────────────────────────────────────────────────────────────────
 BUILTIN_REQS = {
     "DATA SCIENCE": {
