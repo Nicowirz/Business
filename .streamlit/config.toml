@@ -1,8 +1,6 @@
 [theme]
-primaryColor = "#F1B82D"     # Mizzou Gold
-backgroundColor = "#FFFFFF"  # White
-secondaryBackgroundColor = "#E1E1E1" # Light Gray
-textColor = "#000000"        # Black
-font = "sans serif"
-
-
+primaryColor = "#F1B82D"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#000000"
+font = "serif"
