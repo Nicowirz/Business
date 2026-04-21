@@ -5,24 +5,22 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import csv
-import pandas as pd # <-- NEW: For better table styling
+import pandas as pd
+import time 
 
-# NEW SDK IMPORTS
 from google import genai
 from google.genai import types
 
 # ─────────────────────────────────────────────────────────────────
 # MIZZOU ADVANCED INTERFACE CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
-# This must be the very first Streamlit command!
 st.set_page_config(
     page_title="TigerAdvisor | Mizzou",
     page_icon="🐯",
-    layout="wide", # Wider layout is better for tables
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- Define Mizzou Colors ---
 MIZZOU_GOLD = "#F1B82D"
 MIZZOU_BLACK = "#000000"
 MIZZOU_GREY = "#E1E1E1"
@@ -30,133 +28,40 @@ MIZZOU_GREY = "#E1E1E1"
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
-# The local secrets file we set up earlier: .streamlit/secrets.toml
 API_KEY = st.secrets["GEMINI_API_KEY"]
 
 # ─────────────────────────────────────────────────────────────────
 # MIZZOU SIDEBAR & INTERFACE
 # ─────────────────────────────────────────────────────────────────
-
-# --- Sidebar Elements ---
 with st.sidebar:
-    # 1. FIXED LOGO: The file mu_logo.png must be in your GitHub repo!
     try:
         st.image("mu_logo.png", width=180)
     except:
-        # Fallback to text if the image still fails (unlikely)
         st.markdown(f"## **<span style='color:{MIZZOU_GOLD}'>Tiger</span>**Advisor", unsafe_allow_html=True)
     
     st.divider()
     
-    # 2. Upload Transcript Section
     st.markdown(f"### **1. 📋 Upload Unofficial Transcript**")
     uploaded_file = st.file_uploader("Must be PDF format", type="pdf", help="Upload your PDF transcript from myZou.")
     
     st.divider()
     
-    # 3. Mizzou Mission & How To
     st.markdown(f"#### **About TigerAdvisor**")
     st.info("""This AI-powered advisor helps you navigate your Mizzou degree plan by 
-    parsing your unofficial transcript and comparing it to live catalog requirements.""")
+    parsing your unofficial transcript and dynamically scraping live catalog requirements.""")
     st.warning("⚠️ **Disclaimer:** This tool is for informational purposes. Always consult an official human academic advisor before enrolling.")
     
-    # Reset button
     if st.button("🔄 Reset Current Session"):
         st.session_state.clear()
         st.rerun()
 
-# --- Main Page Header ---
-# This uses custom HTML (unsafe_allow_html=True) to force the Mizzou branding
 st.markdown(f"""
 <h1 style='color:{MIZZOU_BLACK};'>🐯 University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span></h1>
 """, unsafe_allow_html=True)
 
-# Define Catalog URL Map
-CATALOG_URLS = {
-    "BUSINESS":         "https://catalog.missouri.edu/collegeofbusiness/businessadministration/bsba-business-administration/",
-    "ACCOUNTANCY":      "https://catalog.missouri.edu/collegeofbusiness/accountancy/bsacc-accountancy/",
-    "DATA SCIENCE":     "https://catalog.missouri.edu/collegeofengineering/datascience/bs-data-science/",
-    "COMPUTER SCIENCE": "https://catalog.missouri.edu/collegeofengineering/computerscience/bs-computer-science/",
-    "MECHANICAL ENG":   "https://catalog.missouri.edu/collegeofengineering/mechanicalengineering/bs-mechanical-engineering/",
-    "FINANCE":          "https://catalog.missouri.edu/collegeofbusiness/finance/bsba-finance/",
-    "ECONOMICS":        "https://catalog.missouri.edu/collegeofartsandscience/economics/bs-economics/",
-}
-
-# (Keep the rest of your original data and functions, they are perfect!)
 # ─────────────────────────────────────────────────────────────────
-# BUILT-IN REQUIREMENTS (2025-26 catalog fallback)
+# TRANSCRIPT PARSING 
 # ─────────────────────────────────────────────────────────────────
-BUILTIN_REQS = {
-    "DATA SCIENCE": {
-        "Core Courses (all required — 30 cr)": [
-            ("DATA SCI 1030", "Foundations of Data Science", 3),
-            ("STAT 2800",     "Intuition, Simulation, and Data", 3),
-            ("CMP SC 1300",   "Computing with Data in Python", 3),
-            ("CMP SC 2300",   "Intro to Computational Data Visualization", 3),
-            ("CMP SC 3380",   "Database Applications and Info Systems", 3),
-            ("STAT 4510",     "Applied Statistical Models I", 3),
-            ("STAT 4520",     "Applied Statistical Models II", 3),
-            ("MATH 1500",     "Analytic Geometry & Calculus I (or MATH 1400)", 5),
-            ("MATH 2320",     "Discrete Mathematical Structures", 3),
-            ("MATH 4140",     "Matrix Theory", 3),
-        ],
-        "Intermediate Courses (choose 4, 12 cr)": [
-            ("CMP SC 4350", "Big Data Analytics", 3),
-            ("CMP SC 4720", "Intro to Machine Learning", 3),
-            ("STAT 4560",   "Applied Multivariate Data Analysis", 3),
-            ("STAT 4640",   "Intro to Bayesian Data Analysis", 3),
-            ("MATH 1700",   "Calculus II (or MATH 2100)", 5),
-            ("MATH 4100",   "Differential Equations", 3),
-        ],
-        "Advanced Focus — CS (choose 4, 12 cr)": [
-            ("CMP SC 4540", "Neural Models and Machine Learning", 3),
-            ("CMP SC 4740", "Interdisciplinary Intro to NLP", 3),
-            ("CMP SC 4750", "Artificial Intelligence I", 3),
-            ("CMP SC 4770", "Intro to Computational Intelligence", 3),
-        ],
-        "Experiential Courses (choose 6 cr)": [
-            ("CMP SC 4990",  "Undergraduate Research in CS", 3),
-            ("INTDSC 4971",  "Capstone Internship", 3),
-            ("STAT 4085",    "Problems in Statistics for Undergraduates", 3),
-            ("MATH 4960",    "Special Readings in Mathematics", 3),
-        ],
-        "Supporting / Gen Ed": [
-            ("ENGLSH 1000", "Writing and Rhetoric", 3),
-            ("MATH 1100",   "College Algebra (or equivalent)", 3),
-        ],
-    },
-    "BUSINESS": {
-        "Upper-Level Admission Courses": [
-            ("ACCTCY 2036", "Accounting I", 3),
-            ("ACCTCY 2037", "Accounting II", 3),
-            ("ACCTCY 2258", "Computer-Based Data Systems (or CMP SC 1050)", 3),
-            ("BUS AD 1500", "Foundations of Business & Prof Dev Principles", 3),
-            ("ECONOM 1014", "Principles of Microeconomics", 3),
-            ("ECONOM 1015", "Principles of Macroeconomics", 3),
-            ("ENGLSH 1000", "Writing and Rhetoric", 3),
-            ("MATH 1100",   "College Algebra", 3),
-            ("MATH 1400",   "Calculus for Social/Life Sciences I (or MATH 1300)", 3),
-            ("STAT 2500",   "Intro to Probability and Statistics I", 3),
-        ],
-        "Required Business Core Courses": [
-            ("BUS AD 3500",  "Advanced Professional Development Principles", 3),
-            ("BUS AD 4500",  "Professional Development Program – Internship", 3),
-            ("FINANC 3000",  "Corporate Finance", 3),
-            ("MANGMT 3000",  "Principles of Management", 3),
-            ("MANGMT 3300",  "Intro to Business Processes and Technologies", 3),
-            ("MANGMT 3540",  "Introduction to Business Law", 3),
-            ("MRKTNG 3000",  "Principles of Marketing", 3),
-        ],
-        "Capstone": [
-            ("MANGMT 4990", "Strategic Management", 3),
-        ],
-    },
-}
-
-# ─────────────────────────────────────────────────────────────────
-# TRANSCRIPT PARSING (Perfect, unchanged)
-# ─────────────────────────────────────────────────────────────────
-
 def parse_transcript(file_obj):
     lines = []
     with pdfplumber.open(file_obj) as pdf:
@@ -165,11 +70,12 @@ def parse_transcript(file_obj):
             if text:
                 lines.extend(text.splitlines())
     return {
-        "name":    _parse_name(lines),
-        "majors":  _parse_majors(lines),
-        "gpa":     _parse_gpa_hours(lines)[0],
-        "hours":   _parse_gpa_hours(lines)[1],
-        "courses": _parse_courses(lines),
+        "name":     _parse_name(lines),
+        "majors":   _parse_majors(lines),
+        "emphases": _parse_emphases(lines),
+        "gpa":      _parse_gpa_hours(lines)[0],
+        "hours":    _parse_gpa_hours(lines)[1],
+        "courses":  _parse_courses(lines),
     }
 
 def _parse_name(lines):
@@ -206,6 +112,22 @@ def _parse_majors(lines):
             if s not in majors:
                 majors.append(s)
     return majors
+
+def _parse_emphases(lines):
+    emphases = []
+    for line in lines:
+        s = line.strip().upper()
+        # Stop looking once we hit grades or semester headers to avoid matching course titles
+        if "UGRD" in s or "TERM:" in s or "COURSE" in s or re.match(r"^(FALL|SPNG|SUM)\s+\d{4}", s):
+            break
+        if "FINANCE" in s: emphases.append("FINANCE")
+        if "MANAGEMENT" in s: emphases.append("MANAGEMENT")
+        if "MARKETING" in s: emphases.append("MARKETING")
+        if "ACCOUNTANCY" in s or "ACCOUNTING" in s: emphases.append("ACCOUNTANCY")
+        if "STATISTICS" in s: emphases.append("STATISTICS")
+        if "MATHEMATICS" in s: emphases.append("MATHEMATICS")
+        if "COMPUTER SCIENCE" in s: emphases.append("COMPUTER SCIENCE")
+    return list(set(emphases))
 
 def _parse_gpa_hours(lines):
     gpa = hrs = None
@@ -248,9 +170,8 @@ def _parse_courses(lines):
     return courses
 
 # ─────────────────────────────────────────────────────────────────
-# CATALOG LOOKUP (Perfect, unchanged)
+# DYNAMIC CATALOG LOOKUP & SMART SCRAPING
 # ─────────────────────────────────────────────────────────────────
-
 MAJOR_ALIASES = {
     "BUS OR ACCTCY": "BUSINESS",  
     "BUS": "BUSINESS",
@@ -259,97 +180,576 @@ MAJOR_ALIASES = {
     "MECH ENG": "MECHANICAL ENG"
 }
 
-def get_requirements(major_str):
+DEGREE_INDEX_URL = "https://catalog.missouri.edu/degreesanddegreeprograms/"
+
+# Structured Dict to dynamically target URLs based on detected emphasis
+CATALOG_URLS = {
+    "ACCOUNTANCY": {
+        "CORE": "https://catalog.missouri.edu/collegeofbusiness/accountancy/bsacc-accountancy/"
+    },
+    "DATA SCIENCE": {
+        "CORE": "https://catalog.missouri.edu/collegeofengineering/datascience/bs-data-science/"
+    },
+    "COMPUTER SCIENCE": {
+        "CORE": "https://catalog.missouri.edu/collegeofengineering/computerscience/bs-computer-science/"
+    },
+    "MECHANICAL ENG": {
+        "CORE": "https://catalog.missouri.edu/collegeofengineering/mechanicalengineering/bs-mechanical-engineering/"
+    },
+    "BUSINESS": {
+        "CORE": "https://catalog.missouri.edu/collegeofbusiness/businessadministration/bsba-business-administration/",
+        "FINANCE": "https://catalog.missouri.edu/collegeofbusiness/businessadministration/bsba-business-administration-emphasis-finance-banking/",
+        "MANAGEMENT": "https://catalog.missouri.edu/collegeofbusiness/businessadministration/bsba-business-administration-emphasis-management/",
+        "MARKETING": "https://catalog.missouri.edu/collegeofbusiness/businessadministration/bsba-business-administration-emphasis-marketing/",
+        "ACCOUNTANCY": "https://catalog.missouri.edu/collegeofbusiness/accountancy/bsacc-accountancy/"
+    },
+    "ECONOMICS": {
+        "CORE": "https://catalog.missouri.edu/collegeofartsandscience/economics/bs-economics/"
+    },
+}
+
+def _merge_reqs(target, source):
+    for k, v in source.items():
+        if k not in target:
+            target[k] = v
+        else:
+            for item in v:
+                if item[0] not in [x[0] for x in target[k]]:
+                    target[k].append(item)
+
+def _sum_required_credits(courses):
+    return sum(credits for code, _, credits in courses if not code.startswith("OR "))
+
+def _normalize_text(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+def _normalize_lookup_key(text):
+    return re.sub(r"[^A-Z0-9]+", " ", (text or "").upper()).strip()
+
+def _name_tokens(text):
+    stopwords = {"AND", "OF", "IN", "THE"}
+    return [token for token in _normalize_lookup_key(text).split() if token and token not in stopwords]
+
+def _extract_course_credits_from_row(tag, title_text=""):
+    texts = [_normalize_text(td.get_text(" ", strip=True)) for td in tag.find_all("td")]
+    texts.append(_normalize_text(title_text))
+
+    for text in reversed(texts):
+        if not text:
+            continue
+        paren_match = re.search(r"\((\d+(?:\.\d+)?)\)\s*$", text)
+        if paren_match:
+            return float(paren_match.group(1))
+
+        trailing_match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*$", text)
+        if trailing_match and len(text.split()) <= 8:
+            return float(trailing_match.group(1))
+
+    return 3.0
+
+def _extract_program_name(page_title):
+    title = _normalize_text(page_title)
+    if " with Emphasis in " in title:
+        return title.split(" with Emphasis in ", 1)[1]
+    if " in " in title:
+        return title.split(" in ", 1)[1]
+    return title
+
+def _get_page_title(soup):
+    h1 = soup.find("h1")
+    return _normalize_text(h1.get_text(" ", strip=True)) if h1 else ""
+
+def _extract_business_emphasis_name(soup, section_names=None):
+    page_title = _get_page_title(soup)
+    if " with Emphasis in " not in page_title:
+        if section_names:
+            for section_name in section_names:
+                match = re.match(r"^(Required|Additional)\s+(.+?)\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
+                if not match:
+                    continue
+
+                candidate = _normalize_text(match.group(2))
+                candidate_upper = candidate.upper()
+                if candidate_upper in {"CORE", "BUSINESS CORE"}:
+                    continue
+                return candidate
+        return ""
+    return _extract_program_name(page_title)
+
+def _is_business_emphasis_section(section_name, emphasis_name):
+    section_upper = _normalize_text(section_name).upper()
+    emphasis_upper = _normalize_text(emphasis_name).upper()
+
+    if section_upper == "EMPHASIS SUPPORT COURSES":
+        return True
+
+    if not emphasis_upper:
+        return False
+
+    match = re.match(r"^(Required|Additional)\s+(.+?)\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
+    if not match:
+        match = re.match(r"^(Required|Additional)\s+(.+?)\s+Emphasis\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
+    if not match:
+        return False
+
+    section_tokens = set(_name_tokens(match.group(2)))
+    emphasis_tokens = set(_name_tokens(emphasis_name))
+    return bool(section_tokens and emphasis_tokens and section_tokens == emphasis_tokens)
+
+def _build_emphasis_phrase_pattern(emphasis_name):
+    tokens = _name_tokens(emphasis_name)
+    if not tokens:
+        return ""
+    return r"\s*(?:&|AND)?\s*".join(re.escape(token) for token in tokens)
+
+def _business_section_label(section_name, program_name=""):
+    section = _normalize_text(section_name)
+    section_upper = section.upper()
+
+    if re.search(r"(ADMISSION|PRE-BUSINESS|LOWER LEVEL|UPPER LEVEL)", section_upper):
+        return "Upper-Level Admission Requirements"
+    if re.search(r"(REQUIRED CORE|BUSINESS CORE|CORE COURSES|COMMON BODY OF KNOWLEDGE)", section_upper):
+        return "Business Core Requirements"
+    if program_name:
+        return f"{program_name}: {section}"
+    return section
+
+def _parse_business_requirements_from_text(soup, program_name):
+    lines = [_normalize_text(text) for text in soup.stripped_strings]
+    start_idx = next((i for i, line in enumerate(lines) if line == "Major Program Requirements"), None)
+    if start_idx is None:
+        return {}
+
+    end_markers = {"Semester Plan", "Degree Audit", "Major and Career Exploration"}
+    block = []
+    for line in lines[start_idx + 1:]:
+        if line in end_markers:
+            break
+        if line:
+            block.append(line)
+
+    if not block:
+        return {}
+
+    section_defs = []
+    ordered_courses = []
+    current_section = None
+
+    section_line_re = re.compile(r"^(?P<label>.+?(?:Courses|Requirements))\s+(?P<credits>\d+(?:\.\d+)?)$")
+    select_credit_re = re.compile(r"^(?:Select|Choose).+?:\s*(\d+(?:\.\d+)?)$")
+    course_re = re.compile(r"^(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$")
+    or_course_re = re.compile(r"^or\s+(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$", re.IGNORECASE)
+
+    i = 0
+    while i < len(block):
+        line = block[i]
+        section_match = section_line_re.match(line)
+        if section_match:
+            current_section = {
+                "name": _business_section_label(section_match.group("label"), program_name),
+                "target_credits": float(section_match.group("credits")),
+            }
+            section_defs.append(current_section)
+            i += 1
+            continue
+
+        if current_section and current_section.get("target_credits") is None:
+            select_match = select_credit_re.match(line)
+            if select_match:
+                current_section["target_credits"] = float(select_match.group(1))
+                i += 1
+                continue
+
+        code = None
+        is_alt = False
+        or_match = or_course_re.match(line)
+        if or_match:
+            code = _normalize_text(or_match.group("code")).upper()
+            is_alt = True
+        else:
+            course_match = course_re.match(line)
+            if course_match:
+                code = _normalize_text(course_match.group("code")).upper()
+
+        if code:
+            title = ""
+            if i + 1 < len(block):
+                next_line = block[i + 1]
+                if not section_line_re.match(next_line) and not select_credit_re.match(next_line) and not course_re.match(next_line) and not or_course_re.match(next_line):
+                    title = next_line
+                    i += 1
+            ordered_courses.append((f"OR {code}" if is_alt else code, title, 3.0))
+
+        i += 1
+
+    if not section_defs or not ordered_courses:
+        return {}
+
+    parsed_sections = {section["name"]: [] for section in section_defs}
+    section_index = 0
+    applied_credits = 0.0
+
+    for code, title, credits in ordered_courses:
+        while section_index < len(section_defs) - 1:
+            target = section_defs[section_index]["target_credits"]
+            if target and applied_credits >= target:
+                section_index += 1
+                applied_credits = 0.0
+            else:
+                break
+
+        current_name = section_defs[section_index]["name"]
+        if not any(existing[0] == code for existing in parsed_sections[current_name]):
+            parsed_sections[current_name].append((code, title, credits))
+        if not code.startswith("OR "):
+            applied_credits += credits
+
+    return {name: courses for name, courses in parsed_sections.items() if courses}
+
+def _parse_business_upper_level_from_text(soup):
+    lines = [_normalize_text(text) for text in soup.stripped_strings]
+    start_idx = next((i for i, line in enumerate(lines) if re.match(r"^Upper Level Admission Courses\s+\d+(?:\.\d+)?$", line, re.IGNORECASE)), None)
+    if start_idx is None:
+        return []
+
+    section_line_re = re.compile(r"^.+(?:Courses|Requirements)\s+\d+(?:\.\d+)?$", re.IGNORECASE)
+    course_re = re.compile(r"^([A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$")
+    or_course_re = re.compile(r"^or\s+([A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$", re.IGNORECASE)
+
+    courses = []
+    i = start_idx + 1
+    while i < len(lines):
+        line = lines[i]
+        if section_line_re.match(line):
+            break
+
+        code = None
+        is_alt = False
+        or_match = or_course_re.match(line)
+        if or_match:
+            code = _normalize_text(or_match.group(1)).upper()
+            is_alt = True
+        else:
+            course_match = course_re.match(line)
+            if course_match:
+                code = _normalize_text(course_match.group(1)).upper()
+
+        if code:
+            title = ""
+            if i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if not section_line_re.match(next_line) and not course_re.match(next_line) and not or_course_re.match(next_line):
+                    title = next_line
+                    i += 1
+            clean_code = f"OR {code}" if is_alt else code
+            if not any(existing[0] == clean_code for existing in courses):
+                courses.append((clean_code, title, 3))
+        i += 1
+
+    return courses
+
+def _parse_business_emphasis_summary_credits(soup, emphasis_name):
+    page_text = _normalize_text(soup.get_text(" ", strip=True)).upper()
+    emphasis_upper = emphasis_name.upper()
+    emphasis_pattern = _build_emphasis_phrase_pattern(emphasis_name)
+
+    patterns = [
+        rf"REQUIRED\s+{emphasis_pattern}\s+COURSES\s+(\d+(?:\.\d+)?)" if emphasis_pattern else "",
+        rf"REQUIRED\s+{emphasis_pattern}\s+EMPHASIS\s+COURSES\s+(\d+(?:\.\d+)?)" if emphasis_pattern else "",
+        rf"ADDITIONAL\s+{emphasis_pattern}\s+COURSES\s+(\d+(?:\.\d+)?)" if emphasis_pattern else "",
+        rf"ADDITIONAL\s+{emphasis_pattern}\s+EMPHASIS\s+COURSES\s+(\d+(?:\.\d+)?)" if emphasis_pattern else "",
+        r"EMPHASIS\s+SUPPORT\s+COURSES\s+(\d+(?:\.\d+)?)",
+    ]
+
+    total = 0.0
+    matched = False
+    for pattern in patterns:
+        if not pattern:
+            continue
+        match = re.search(pattern, page_text, re.IGNORECASE)
+        if match:
+            total += float(match.group(1))
+            matched = True
+
+    if matched:
+        return total
+
+    lines = [_normalize_text(text) for text in soup.stripped_strings]
+    start_idx = next((i for i, line in enumerate(lines) if line == "Major Program Requirements"), None)
+    if start_idx is None:
+        return 0
+
+    block = []
+    for line in lines[start_idx + 1:]:
+        if line in {"Semester Plan", "Degree Audit", "Major and Career Exploration"}:
+            break
+        if line:
+            block.append(line)
+
+    section_credit_re = re.compile(r"^(?P<label>.+?)\s+(?P<credits>\d+(?:\.\d+)?)$")
+    fallback_total = 0.0
+    for line in block:
+        match = section_credit_re.match(line)
+        if not match:
+            continue
+
+        label_upper = match.group("label").upper()
+        credits = float(match.group("credits"))
+
+        if label_upper in {f"REQUIRED {emphasis_upper} COURSES", f"REQUIRED {emphasis_upper} EMPHASIS COURSES"}:
+            fallback_total += credits
+        elif label_upper in {f"ADDITIONAL {emphasis_upper} COURSES", f"ADDITIONAL {emphasis_upper} EMPHASIS COURSES"}:
+            fallback_total += credits
+        elif label_upper == "EMPHASIS SUPPORT COURSES":
+            fallback_total += credits
+
+    return fallback_total
+
+def _discover_dynamic_catalog_urls(major_str):
+    try:
+        resp = requests.get(DEGREE_INDEX_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return {}
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    major_key = _normalize_lookup_key(major_str)
+    candidates = []
+
+    for row in soup.find_all("tr"):
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 2:
+            continue
+
+        name = _normalize_text(cells[0].get_text(" ", strip=True))
+        if not name:
+            continue
+
+        name_key = _normalize_lookup_key(name)
+        if major_key not in name_key and name_key not in major_key:
+            continue
+
+        degree_links = []
+        for link in row.find_all("a", href=True):
+            href = link["href"]
+            text = _normalize_text(link.get_text(" ", strip=True)).upper()
+            if not href.startswith("http"):
+                href = requests.compat.urljoin(DEGREE_INDEX_URL, href)
+            if "catalog.missouri.edu" not in href:
+                continue
+            if any(skip in text for skip in ["MINOR", "CERT", "PHD", "MS", "MA", "MBA", "MACC", "EDD", "JD", "LLM", "DNP"]):
+                continue
+            if re.fullmatch(r"[A-Z.]+", text):
+                degree_links.append(href)
+
+        if degree_links:
+            candidates.append((name_key, degree_links[0]))
+
+    if not candidates:
+        return {}
+
+    exact_match = next((url for name_key, url in candidates if name_key == major_key), None)
+    if exact_match:
+        return {"CORE": exact_match}
+
+    best_match = max(candidates, key=lambda item: len(set(item[0].split()) & set(major_key.split())))
+    return {"CORE": best_match[1]}
+
+def get_requirements(major_str, emphases=[]):
     major_upper = major_str.upper()
 
     for abbr, full_name in MAJOR_ALIASES.items():
         major_upper = re.sub(rf"\b{abbr}\b", full_name, major_upper)
 
-    for keyword, url in CATALOG_URLS.items():
-        if keyword in major_upper:
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0"
-                }
-                resp = requests.get(url, headers=headers, timeout=10)
-                
-                if resp.status_code == 200:
-                    scraped = _scrape(resp.text, major_upper)
-                    if scraped:
-                        return scraped
-            except requests.RequestException:
-                break  
+    aggregated_reqs = {}
 
-    for keyword, reqs in BUILTIN_REQS.items():
+    for keyword, url_dict in CATALOG_URLS.items():
         if keyword in major_upper:
-            return reqs
+            # Check if any detected emphasis matches our known URLs
+            known_emp_keys = [k for k in url_dict.keys() if k in emphases and k != "CORE"]
+            
+            if known_emp_keys:
+                # Student has a specific emphasis! Scrape strictly that URL + Core
+                keys_to_scrape = known_emp_keys + (["CORE"] if "CORE" in url_dict else [])
+                for key in set(keys_to_scrape):
+                    try:
+                        url = url_dict[key]
+                        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                        if resp.status_code == 200:
+                            should_summarize = (keyword == "BUSINESS" and key == "CORE")
+                            scraped = _scrape(resp.text, major_upper, url, summarize_emphasis=should_summarize)
+                            _merge_reqs(aggregated_reqs, scraped)
+                    except: continue
+            else:
+                # No emphasis detected! Scrape ALL URLs for this major, but summarize the emphasis sections.
+                for key, url in url_dict.items():
+                    try:
+                        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                        if resp.status_code == 200:
+                            scraped = _scrape(resp.text, major_upper, url, summarize_emphasis=True)
+                            _merge_reqs(aggregated_reqs, scraped)
+                    except: continue
+            
+            if aggregated_reqs:
+                return aggregated_reqs
 
+    dynamic_urls = _discover_dynamic_catalog_urls(major_upper)
+    if dynamic_urls.get("CORE"):
+        try:
+            resp = requests.get(dynamic_urls["CORE"], headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if resp.status_code == 200:
+                return _scrape(resp.text, major_upper, dynamic_urls["CORE"], summarize_emphasis=False)
+        except:
+            pass
     return {}
 
-def _scrape(html, major_string):
+def _scrape(html, major_string, url="", summarize_emphasis=False):
     soup = BeautifulSoup(html, "html.parser")
     sections = {}
     current = "Requirements"
     skip_section = False
 
-    for tag in soup.find_all(["h3", "h4", "tr"]):
-        if tag.name in ("h3", "h4"):
+    for tag in soup.find_all(["h2", "h3", "h4", "tr"]):
+        # 1. Parse high-level headers
+        if tag.name in ("h2", "h3", "h4"):
             t = tag.get_text(strip=True)
             if t and len(t) < 80:
                 t_upper = t.upper()
-                if any(x in t_upper for x in ["SEMESTER PLAN", "PLAN OF STUDY"]):
+                
+                if any(x in t_upper for x in ["SEMESTER PLAN", "PLAN OF STUDY", "ONLINE", "SUMMARY", "GRADUATE", "MASTER", "MACC", "MINOR", "CERTIFICATE", "HONORS", "ACCELERATED"]):
                     skip_section = True
                     continue
-
-                current = t
+                
                 is_ba = "B.A." in t_upper or "BACHELOR OF ARTS" in t_upper
                 is_bs = "B.S." in t_upper or "BACHELOR OF SCIENCE" in t_upper
                 
-                if is_ba and "BS" in major_string:
-                    skip_section = True
-                elif is_bs and "BA" in major_string:
-                    skip_section = True
-                else:
-                    skip_section = False 
-            continue
-            
-        if skip_section:
-            continue
-
-        is_alt = 'orclass' in tag.get('class', [])
-        
-        links = tag.find_all("a")
-        for a in links:
-            code_raw = a.get_text(strip=True).upper().replace("\xa0", " ").replace("_", " ")
-            if not re.search(r"[A-Z\s]+\d+", code_raw):
-                continue
-                
-            clean_code = re.search(r"([A-Z\s]+\d+)", code_raw).group(1).strip()
-            
-            td = a.find_parent("td")
-            if td and td.get_text(strip=True).lower().startswith("or"):
-                is_alt = True
-                
-            if is_alt:
-                clean_code = "OR " + clean_code
-                
-            tds = tag.find_all("td")
-            title = ""
-            for i, td_elem in enumerate(tds):
-                if a in td_elem.find_all("a") and i + 1 < len(tds):
-                    title = tds[i + 1].get_text(strip=True)
-                    break
+                if is_ba and "BS" in major_string: skip_section = True
+                elif is_bs and "BA" in major_string: skip_section = True
+                else: skip_section = False 
                     
-            sections.setdefault(current, [])
-            if not any(c[0] == clean_code for c in sections[current]):
-                sections[current].append((clean_code, title, 3))
+                current = t
+            continue
+            
+        if skip_section: continue
 
-    return sections
+        # 2. Parse CourseLeaf Tables dynamically
+        if tag.name == "tr":
+            comment = tag.find("span", class_="courselistcomment")
+            if comment:
+                c_text = comment.get_text(strip=True)
+                if len(c_text) > 3:
+                    c_up = c_text.upper()
+                    if any(x in c_up for x in ["GRADUATE", "MASTER", "MACC", "MINOR", "CERTIFICATE"]):
+                        skip_section = True
+                        continue
+                    else:
+                        skip_section = False
+                        current = c_text
+                continue
+            
+            is_alt = 'orclass' in tag.get('class', [])
+            links = tag.find_all("a")
+            for a in links:
+                code_raw = a.get_text(strip=True).upper().replace("\xa0", " ").replace("_", " ")
+                match = re.search(r"([A-Z\s]+\d{4})", code_raw)
+                if not match: continue
+                    
+                clean_code = match.group(1).strip()
+                
+                # CRITICAL: Ignore graduate level courses (7000+)
+                num_match = re.search(r"\d{4}", clean_code)
+                if num_match and int(num_match.group()) >= 7000:
+                    continue 
+                
+                td = a.find_parent("td")
+                if td and td.get_text(strip=True).lower().startswith("or"):
+                    is_alt = True
+                    
+                if is_alt: clean_code = "OR " + clean_code
+                    
+                tds = tag.find_all("td")
+                title = ""
+                for i, td_elem in enumerate(tds):
+                    if a in td_elem.find_all("a") and i + 1 < len(tds):
+                        title = tds[i + 1].get_text(strip=True)
+                        break
+                        
+                sections.setdefault(current, [])
+                if not any(c[0] == clean_code for c in sections[current]):
+                    sections[current].append((clean_code, title, 3))
+
+    # 3. DYNAMIC GROUPING & SUMMARIZATION
+    processed = {}
+    major_upper = major_string.upper()
+    
+    if "BUSINESS" in major_upper:
+        emphasis_name = _extract_business_emphasis_name(soup, sections.keys())
+
+        if not any(any(k in sec.upper() for k in ["ADMISSION", "UPPER-LEVEL", "UPPER LEVEL"]) for sec in sections):
+            upper_level_courses = _parse_business_upper_level_from_text(soup)
+            if upper_level_courses:
+                sections["Upper-Level Admission Requirements"] = upper_level_courses
+        
+        emphasis_credits = 0
+        
+        for sec, courses in sections.items():
+            s_up = sec.upper()
+            if any(x in s_up for x in ["ONLINE", "SUMMARY", "GRADUATE", "MASTER", "MINOR"]): continue
+                
+            if any(k in s_up for k in ["ADMISSION", "UPPER-LEVEL", "UPPER LEVEL"]):
+                processed.setdefault("Upper-Level Admission Requirements", []).extend(c for c in courses if c not in processed.get("Upper-Level Admission Requirements", []))
+                            
+            elif any(k in s_up for k in ["REQUIRED CORE", "BUSINESS CORE", "REQUIRED BUSINESS", "CORE REQUIREMENTS"]):
+                processed.setdefault("Business Core Requirements", []).extend(c for c in courses if c not in processed.get("Business Core Requirements", []))
+                            
+            elif _is_business_emphasis_section(sec, emphasis_name):
+                if summarize_emphasis:
+                    emphasis_credits += _sum_required_credits(courses)
+                else:
+                    new_sec_name = f"{emphasis_name} Emphasis: {sec}" if emphasis_name else sec
+                    processed.setdefault(new_sec_name, []).extend(c for c in courses if c not in processed.get(new_sec_name, []))
+            elif not summarize_emphasis:
+                processed.setdefault(sec, []).extend(c for c in courses if c not in processed.get(sec, []))
+                
+        # Generate summary row if flag is true
+        if summarize_emphasis and emphasis_name:
+            parsed_summary_credits = _parse_business_emphasis_summary_credits(soup, emphasis_name)
+            if parsed_summary_credits > 0:
+                emphasis_credits = parsed_summary_credits
+
+        if summarize_emphasis and emphasis_name and emphasis_credits > 0:
+            processed[f"{emphasis_name} Emphasis Options"] = [("EMPHASIS", f"Complete {emphasis_credits} credits of {emphasis_name} requirements", emphasis_credits)]
+                
+    elif "DATA SCIENCE" in major_upper:
+        for sec, courses in sections.items():
+            s_up = sec.upper()
+            if "ONLINE" in s_up: continue
+            
+            if "CORE" in s_up:
+                processed.setdefault("Core Courses", []).extend(c for c in courses if c not in processed.get("Core Courses", []))
+            elif "INTERMEDIATE" in s_up:
+                processed.setdefault("Intermediate Courses", []).extend(c for c in courses if c not in processed.get("Intermediate Courses", []))
+            elif any(x in s_up for x in ["ADVANCED", "EXPERIENTIAL", "EXPERIMENTAL", "FOCUS", "ELECTIVE", "EMPHASIS"]):
+                group_name = "Advanced/Experimental Focus"
+                if "STAT" in s_up: group_name = "Advanced/Experimental Focus - Statistics"
+                elif "MATH" in s_up: group_name = "Advanced/Experimental Focus - Mathematics"
+                elif "COMP" in s_up or "CS" in s_up: group_name = "Advanced/Experimental Focus - Computer Science"
+                
+                if summarize_emphasis:
+                    total_credits = _sum_required_credits(courses)
+                    processed[group_name] = [("EMPHASIS", f"Select {total_credits} credits for {group_name}", total_credits)]
+                else:
+                    processed.setdefault(group_name, []).extend(c for c in courses if c not in processed.get(group_name, []))
+            elif not summarize_emphasis:
+                processed.setdefault(sec, []).extend(c for c in courses if c not in processed.get(sec, []))
+    else:
+        processed = sections
+
+    return processed
 
 # ─────────────────────────────────────────────────────────────────
-# GAP ANALYSIS (Perfect, unchanged)
+# GAP ANALYSIS
 # ─────────────────────────────────────────────────────────────────
-
 def norm(code):
     code = code.upper().replace("_", " ").strip()
     return re.sub(r"(\d+)[HW]\b", r"\1", code)
@@ -361,7 +761,7 @@ def gap_analysis(courses, requirements):
     
     for section, items in requirements.items():
         sec_upper = section.upper()
-        is_pick_list = any(k in sec_upper for k in ["FOCUS", "EXPERIENTIAL", "ELECTIVE", "CHOOSE", "SELECT"])
+        is_pick_list = any(k in sec_upper for k in ["FOCUS", "EXPERIENTIAL", "ELECTIVE", "CHOOSE", "SELECT", "EMPHASIS", "OPTIONS"])
         
         groups = []
         for code, title, _ in items:
@@ -392,14 +792,73 @@ def gap_analysis(courses, requirements):
             else:
                 first_code, first_title = group[0]
                 status_text = "⚪ Option" if is_pick_list else "❌ Outstanding"
+                
+                # Catch the dynamically generated summary rows
+                if first_code.replace("OR ", "") == "EMPHASIS":
+                    status_text = "ℹ️ Summary"
+                    
                 results.append({"section": section, "code": first_code.replace("OR ", ""), "title": first_title, "status": status_text, "grade": "—"})
 
     return results
 
-# ─────────────────────────────────────────────────────────────────
-# AI TOOLS (LIVE SCRAPING & EXPORT) (Perfect, unchanged)
-# ─────────────────────────────────────────────────────────────────
+def _split_audit_results(results):
+    detailed_sections = {}
+    emphasis_summaries = []
 
+    for row in results:
+        if row["code"] == "EMPHASIS" and "Summary" in row["status"]:
+            emphasis_summaries.append(row)
+        else:
+            detailed_sections.setdefault(row["section"], []).append(row)
+
+    return detailed_sections, emphasis_summaries
+
+def _style_status_table(df):
+    def color_status(row):
+        status = row["status"]
+        if "✅" in status:
+            return ["background-color: #d4edda; color: #155724; font-weight: bold"] * len(row)
+        if "⏳" in status:
+            return ["background-color: #fff3cd; color: #856404; font-weight: bold"] * len(row)
+        if "❌" in status:
+            return ["background-color: #f8d7da; color: #721c24; font-weight: bold"] * len(row)
+        if "ℹ️" in status:
+            return ["background-color: #e2e3e5; color: #383d41; font-weight: bold"] * len(row)
+        return [""] * len(row)
+
+    return df.style.apply(color_status, axis=1).hide(axis="index")
+
+def render_degree_audit(major, results, emphases):
+    detailed_sections, emphasis_summaries = _split_audit_results(results)
+    active_emphasis = ", ".join(emphases) if emphases else None
+
+    heading = f"#### **Degree Audit for: <span style='color:{MIZZOU_GOLD};'>{major}**</span>"
+    if active_emphasis:
+        heading += f"  \n**Detected emphasis:** {active_emphasis}"
+    st.markdown(heading, unsafe_allow_html=True)
+
+    if emphasis_summaries and not active_emphasis:
+        st.caption("No emphasis area was found on the transcript, so the audit shows the shared requirements plus a credit-only summary for each emphasis option.")
+        summary_df = pd.DataFrame(
+            [
+                {
+                    "Emphasis Area": row["section"].replace(" Emphasis Options", "").replace("Advanced/Experimental Focus - ", ""),
+                    "Requirement Summary": row["title"],
+                }
+                for row in emphasis_summaries
+            ]
+        )
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+    for section, rows in detailed_sections.items():
+        section_df = pd.DataFrame(rows)[["code", "title", "status", "grade"]]
+        open_by_default = any("❌" in row["status"] or "⏳" in row["status"] for row in rows)
+        with st.expander(section, expanded=open_by_default):
+            st.dataframe(_style_status_table(section_df), use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────
+# AI TOOLS (LIVE SCRAPING & EXPORT)
+# ─────────────────────────────────────────────────────────────────
 def get_course_details(course_code: str) -> dict:
     clean_code = course_code.upper().strip()
     match = re.match(r"([A-Z\s]+)\s+(\d+\w*)", clean_code)
@@ -446,11 +905,9 @@ def export_schedule(course_codes: list[str]) -> str:
     except Exception as e:
         return f"ERROR: Could not save schedule. {e}"
 
-
 # ─────────────────────────────────────────────────────────────────
 # STREAMLIT WEB INTERFACE & AI CHAT
 # ─────────────────────────────────────────────────────────────────
-
 def init_chat_session(transcript_data, gap_analysis_results):
     client = genai.Client(api_key=API_KEY)
 
@@ -475,6 +932,7 @@ def init_chat_session(transcript_data, gap_analysis_results):
     Here is the student's academic profile:
     Name: {transcript_data['name']}
     Majors: {', '.join(transcript_data['majors'])}
+    Emphases: {', '.join(transcript_data['emphases']) if transcript_data['emphases'] else 'None'}
     GPA: {transcript_data['gpa']}
     
     Here is their Degree Gap Analysis (JSON):
@@ -489,13 +947,11 @@ def init_chat_session(transcript_data, gap_analysis_results):
         initial_response = chat.send_message(student_context)
         return chat, initial_response.text
     except Exception as e:
-        error_msg = f"⚠️ **API Error:** (Rate limit or API key error). Details: {e}"
+        error_msg = f"⚠️ **API Error:** Details: {e}"
         return chat, error_msg
 
 def main():
-    # ─── MAIN APP LOGIC ───
     if uploaded_file is not None:
-        # Create tabs for cleaner UI
         chat_tab, data_tab = st.tabs([f"🐯 Advisor Chat", "📋 My Degree Audit"])
 
         if "analyzed" not in st.session_state:
@@ -506,7 +962,8 @@ def main():
                 all_results = {}
                 if t["majors"]:
                     for major in t["majors"]:
-                        reqs = get_requirements(major)
+                        # Pass the dynamically parsed emphases to the scraper
+                        reqs = get_requirements(major, t["emphases"])
                         if reqs:
                             all_results[major] = gap_analysis(t["courses"], reqs)
                 
@@ -520,12 +977,11 @@ def main():
         t = st.session_state.transcript
         
         # ─────────────────────────────────────────────────────────────────────
-        # TAB 2: DEGREE AUDIT (The Styled Mizzou Table)
+        # TAB 2: DEGREE AUDIT
         # ─────────────────────────────────────────────────────────────────────
         with data_tab:
             st.markdown(f"### **Mizzou Academic Profile: {t['name']}**")
             
-            # Use Metrics to show GPA and Credits
             col1, col2, col3 = st.columns(3)
             col1.metric("Current CUM GPA", f"{t['gpa']}", help="From myZou")
             col2.metric("Credits Earned", f"{int(t['hours'])}", "Fall 2024 CUM")
@@ -534,40 +990,21 @@ def main():
 
             if st.session_state.gap_analysis:
                 for major, results in st.session_state.gap_analysis.items():
-                    st.markdown(f"#### **Degree Audit for: <span style='color:{MIZZOU_GOLD};'>{major}**</span>", unsafe_allow_html=True)
-                    
-                    # Convert results to a pandas DataFrame for better styling
-                    df = pd.DataFrame(results)
-                    
-                    # Custom Styling function for the status column
-                    def color_status(row):
-                        status = row['status']
-                        if '✅' in status:
-                            return ['background-color: #d4edda; color: #155724; font-weight: bold'] * len(row)
-                        elif '⏳' in status:
-                            return ['background-color: #fff3cd; color: #856404; font-weight: bold'] * len(row)
-                        elif '❌' in status:
-                            return ['background-color: #f8d7da; color: #721c24; font-weight: bold'] * len(row)
-                        else:
-                            return [''] * len(row)
-                    
-                    # Apply styling, hide unnecessary columns
-                    styled_df = df.style.apply(color_status, axis=1).hide(axis='index')
-                    st.dataframe(styled_df, use_container_width=True)
+                    render_degree_audit(major, results, t["emphases"])
             else:
                 st.warning("No Major detected on transcript. AI will generalize.")
 
         # ─────────────────────────────────────────────────────────────────────
-        # TAB 1: AI CHAT (Tiger Branded)
+        # TAB 1: AI CHAT
         # ─────────────────────────────────────────────────────────────────────
         with chat_tab:
             st.markdown(f"#### **Tiger<span style='color:{MIZZOU_GOLD};'>Advisor** Chat</span>", unsafe_allow_html=True)
             
             if "messages" in st.session_state:
-                # Add an expander for parsed data
-                with st.expander("📋 View Summary of Your Transcipt (Optional)"):
-                    st.write(f"Parsed Name: {t['name']}")
-                    st.write(f"Parsed Majors: {', '.join(t['majors'])}")
+                with st.expander("📋 View Summary of Your Transcript Profile (Optional)"):
+                    st.write(f"**Parsed Name:** {t['name']}")
+                    st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
+                    st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
 
                 for msg in st.session_state.messages:
                     with st.chat_message(msg["role"], avatar="🐯" if msg["role"] == "assistant" else "👤"):
@@ -581,11 +1018,15 @@ def main():
                     with st.chat_message("assistant", avatar="🐯"):
                         with st.spinner("Thinking (Consulting myZou)..."):
                             try:
+                                time.sleep(1)
                                 response = st.session_state.chat.send_message(user_input)
                                 st.markdown(response.text)
                                 st.session_state.messages.append({"role": "assistant", "content": response.text})
                             except Exception as e:
-                                st.error(f"Error communicating with Gemini: {e}")
+                                if "429" in str(e):
+                                    st.error("🐯 Slow down, Tiger! We've hit the Mizzou server speed limit. Wait 30 seconds and try again.")
+                                else:
+                                    st.error(f"Error communicating with Gemini: {e}")
 
     else:
         st.info("👈 Please upload your unofficial transcript (PDF) in the sidebar to begin.")
