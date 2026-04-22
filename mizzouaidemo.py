@@ -7,9 +7,27 @@ import json
 import csv
 import pandas as pd
 import time 
+from types import SimpleNamespace
 
-from google import genai
-from google.genai import types
+from groq import Groq
+
+
+class TigerChat:
+    def __init__(self, client, system_prompt):
+        self.client = client
+        self.model = "llama-3.3-70b-versatile"
+        self.messages = [{"role": "system", "content": system_prompt}]
+
+    def send_message(self, text):
+        self.messages.append({"role": "user", "content": text})
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=self.messages,
+            temperature=0.2,
+        )
+        response_text = (response.choices[0].message.content or "").strip()
+        self.messages.append({"role": "assistant", "content": response_text})
+        return SimpleNamespace(text=response_text)
 
 # ─────────────────────────────────────────────────────────────────
 # MIZZOU ADVANCED INTERFACE CONFIGURATION
@@ -28,7 +46,7 @@ MIZZOU_GREY = "#E1E1E1"
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
-API_KEY = st.secrets["GEMINI_API_KEY"]
+API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ─────────────────────────────────────────────────────────────────
 # MIZZOU SIDEBAR & INTERFACE
@@ -905,12 +923,59 @@ def export_schedule(course_codes: list[str]) -> str:
     except Exception as e:
         return f"ERROR: Could not save schedule. {e}"
 
+def _build_compact_gap_context(gap_analysis_results, max_items_per_major=30):
+    compact = {}
+    for major, rows in (gap_analysis_results or {}).items():
+        complete = [r for r in rows if "✅" in r.get("status", "")]
+        in_progress = [r for r in rows if "⏳" in r.get("status", "")]
+        outstanding = [r for r in rows if "❌" in r.get("status", "")]
+        summaries = [r for r in rows if "ℹ️" in r.get("status", "")]
+
+        # Keep context focused on actionable items to reduce token usage.
+        top_outstanding = [
+            {
+                "section": r.get("section", ""),
+                "code": r.get("code", ""),
+                "title": r.get("title", ""),
+                "status": r.get("status", ""),
+            }
+            for r in outstanding[:max_items_per_major]
+        ]
+        top_in_progress = [
+            {
+                "section": r.get("section", ""),
+                "code": r.get("code", ""),
+                "title": r.get("title", ""),
+                "status": r.get("status", ""),
+            }
+            for r in in_progress[:10]
+        ]
+        emphasis_summaries = [
+            {
+                "section": r.get("section", ""),
+                "title": r.get("title", ""),
+            }
+            for r in summaries[:10]
+        ]
+
+        compact[major] = {
+            "counts": {
+                "complete": len(complete),
+                "in_progress": len(in_progress),
+                "outstanding": len(outstanding),
+                "summary_rows": len(summaries),
+                "total_rows": len(rows),
+            },
+            "top_outstanding": top_outstanding,
+            "top_in_progress": top_in_progress,
+            "emphasis_summaries": emphasis_summaries,
+        }
+    return compact
+
 # ─────────────────────────────────────────────────────────────────
 # STREAMLIT WEB INTERFACE & AI CHAT
 # ─────────────────────────────────────────────────────────────────
 def init_chat_session(transcript_data, gap_analysis_results):
-    client = genai.Client(api_key=API_KEY)
-
     advisor_persona = """
     You are an expert academic advisor for the University of Missouri (Mizzou). 
     Your goal is to help students navigate their degree path based strictly on the gap analysis provided.
@@ -922,12 +987,7 @@ def init_chat_session(transcript_data, gap_analysis_results):
     4. Exporting: When the student agrees on a final list of classes for next semester, use the 'export_schedule' tool.
     """
 
-    config = types.GenerateContentConfig(
-        system_instruction=advisor_persona,
-        tools=[get_course_details, export_schedule],
-        temperature=0.2, 
-    )
-
+    compact_gap = _build_compact_gap_context(gap_analysis_results)
     student_context = f"""
     Here is the student's academic profile:
     Name: {transcript_data['name']}
@@ -935,26 +995,30 @@ def init_chat_session(transcript_data, gap_analysis_results):
     Emphases: {', '.join(transcript_data['emphases']) if transcript_data['emphases'] else 'None'}
     GPA: {transcript_data['gpa']}
     
-    Here is their Degree Gap Analysis (JSON):
-    {json.dumps(gap_analysis_results, indent=2)}
+    Here is their compact Degree Gap Analysis (JSON):
+    {json.dumps(compact_gap, indent=2)}
     
     Introduce yourself to the student (using a Black & Gold Tiger flavor) and ask what term they are scheduling for.
     """
-
-    chat = client.chats.create(model='gemini-2.0-flash', config=config)
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    chat = TigerChat(client, advisor_persona)
     
     try:
         initial_response = chat.send_message(student_context)
-        return chat, initial_response.text
+        return client, chat, initial_response.text
     except Exception as e:
         error_msg = f"⚠️ **API Error:** Details: {e}"
-        return chat, error_msg
+        return client, chat, error_msg
 
 def main():
     if uploaded_file is not None:
         chat_tab, data_tab = st.tabs([f"🐯 Advisor Chat", "📋 My Degree Audit"])
 
-        if "analyzed" not in st.session_state:
+        is_initialized = all(
+            key in st.session_state
+            for key in ["analyzed", "transcript", "gap_analysis", "chat", "chat_client", "messages"]
+        )
+        if not is_initialized:
             with st.spinner("Tiger Advisor is parsing your transcript and analyzing Mizzou catalog requirements..."):
                 t = parse_transcript(uploaded_file)
                 st.session_state.transcript = t
@@ -967,10 +1031,11 @@ def main():
                         if reqs:
                             all_results[major] = gap_analysis(t["courses"], reqs)
                 
+                chat_client, chat_session, first_msg = init_chat_session(t, all_results)
+
                 st.session_state.gap_analysis = all_results
                 st.session_state.analyzed = True
-
-                chat_session, first_msg = init_chat_session(t, all_results)
+                st.session_state.chat_client = chat_client
                 st.session_state.chat = chat_session
                 st.session_state.messages = [{"role": "assistant", "content": first_msg}]
 
@@ -1001,6 +1066,25 @@ def main():
             st.markdown(f"#### **Tiger<span style='color:{MIZZOU_GOLD};'>Advisor** Chat</span>", unsafe_allow_html=True)
             
             if "messages" in st.session_state:
+                pending_user_input = st.session_state.pop("pending_user_input", None)
+                if pending_user_input:
+                    with st.spinner("Thinking (Consulting myZou)..."):
+                        try:
+                            time.sleep(1)
+                            response = st.session_state.chat.send_message(pending_user_input)
+                            st.session_state.messages.append({"role": "assistant", "content": response.text})
+                        except Exception as e:
+                            if "429" in str(e):
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": "🐯 Slow down, Tiger! We've hit the Gemini rate limit. Wait a moment and try again.",
+                                })
+                            else:
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": f"Error communicating with Gemini: {e}",
+                                })
+
                 with st.expander("📋 View Summary of Your Transcript Profile (Optional)"):
                     st.write(f"**Parsed Name:** {t['name']}")
                     st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
@@ -1011,22 +1095,9 @@ def main():
                         st.markdown(msg["content"])
 
                 if user_input := st.chat_input("Ask a question about your prerequisites or balance..."):
-                    with st.chat_message("user", avatar="👤"):
-                        st.markdown(user_input)
                     st.session_state.messages.append({"role": "user", "content": user_input})
-
-                    with st.chat_message("assistant", avatar="🐯"):
-                        with st.spinner("Thinking (Consulting myZou)..."):
-                            try:
-                                time.sleep(1)
-                                response = st.session_state.chat.send_message(user_input)
-                                st.markdown(response.text)
-                                st.session_state.messages.append({"role": "assistant", "content": response.text})
-                            except Exception as e:
-                                if "429" in str(e):
-                                    st.error("🐯 Slow down, Tiger! We've hit the Mizzou server speed limit. Wait 30 seconds and try again.")
-                                else:
-                                    st.error(f"Error communicating with Gemini: {e}")
+                    st.session_state.pending_user_input = user_input
+                    st.rerun()
 
     else:
         st.info("👈 Please upload your unofficial transcript (PDF) in the sidebar to begin.")
