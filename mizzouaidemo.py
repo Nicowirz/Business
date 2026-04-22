@@ -8,6 +8,7 @@ import csv
 import pandas as pd
 import time 
 from types import SimpleNamespace
+from functools import lru_cache
 
 from groq import Groq
 
@@ -87,10 +88,18 @@ def parse_transcript(file_obj):
             text = page.extract_text()
             if text:
                 lines.extend(text.splitlines())
+    programs = _parse_program_entries(lines)
+    majors = [p["name"] for p in programs if p["type"] == "major"]
+    minors = [p["name"] for p in programs if p["type"] == "minor"]
+    certificates = [p["name"] for p in programs if p["type"] == "certificate"]
+    emphases = [p["name"] for p in programs if p["type"] == "emphasis"]
     return {
         "name":     _parse_name(lines),
-        "majors":   _parse_majors(lines),
-        "emphases": _parse_emphases(lines),
+        "programs": programs,
+        "majors":   majors or _parse_majors(lines),
+        "minors":   minors,
+        "certificates": certificates,
+        "emphases": emphases or _parse_emphases(lines),
         "gpa":      _parse_gpa_hours(lines)[0],
         "hours":    _parse_gpa_hours(lines)[1],
         "courses":  _parse_courses(lines),
@@ -109,6 +118,68 @@ SKIP = {
     "MISSOURI CIVICS EXAMINATION", "MU GENERAL EDUCATION MET",
     "GOOD STANDING", "STUDENT ACADEMIC PROFILE",
 }
+
+PROGRAM_PREFIX_MAP = {
+    "major": "major",
+    "majors": "major",
+    "minor": "minor",
+    "minors": "minor",
+    "certificate": "certificate",
+    "certificates": "certificate",
+    "emphasis": "emphasis",
+    "emphases": "emphasis",
+}
+
+def _dedupe_programs(programs):
+    seen = set()
+    deduped = []
+    for item in programs:
+        key = (item["type"], _normalize_lookup_key(item["name"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+def _parse_program_entries(lines):
+    sem_re = re.compile(r"^(FALL|SPNG|SUM)\s+\d{4}", re.IGNORECASE)
+    program_label_re = re.compile(r"^(Major|Majors|Minor|Minors|Certificate|Certificates|Emphasis|Emphases)\s*:?\s*(.+)$", re.IGNORECASE)
+    programs = []
+
+    for raw_line in lines:
+        s = _normalize_text(raw_line)
+        if not s:
+            continue
+        s_upper = s.upper()
+        if s_upper in SKIP:
+            continue
+        if "UGRD CUM:" in s_upper or sem_re.match(s_upper):
+            break
+
+        match = program_label_re.match(s)
+        if match:
+            ptype = PROGRAM_PREFIX_MAP.get(match.group(1).lower(), "")
+            value = _normalize_text(match.group(2))
+            if ptype and value:
+                programs.append({"type": ptype, "name": value})
+            continue
+
+        inline_patterns = [
+            ("minor", r"\bMinor in\s+(.+)$"),
+            ("certificate", r"\b(?:Undergraduate|Graduate)?\s*Certificate in\s+(.+)$"),
+            ("emphasis", r"\bEmphasis in\s+(.+)$"),
+        ]
+        for ptype, pattern in inline_patterns:
+            inline_match = re.search(pattern, s, re.IGNORECASE)
+            if inline_match:
+                programs.append({"type": ptype, "name": _normalize_text(inline_match.group(1))})
+                break
+
+    if not any(p["type"] == "major" for p in programs):
+        for major in _parse_majors(lines):
+            programs.append({"type": "major", "name": major})
+
+    return _dedupe_programs(programs)
 
 def _parse_majors(lines):
     sem_re    = re.compile(r"^(FALL|SPNG|SUM)\s+\d{4}", re.IGNORECASE)
@@ -199,6 +270,7 @@ MAJOR_ALIASES = {
 }
 
 DEGREE_INDEX_URL = "https://catalog.missouri.edu/degreesanddegreeprograms/"
+ADDITIONAL_INDEX_URL = "https://catalog.missouri.edu/additionalcertificatesandminors/"
 
 # Structured Dict to dynamically target URLs based on detected emphasis
 CATALOG_URLS = {
@@ -523,58 +595,121 @@ def _parse_business_emphasis_summary_credits(soup, emphasis_name):
 
     return fallback_total
 
-def _discover_dynamic_catalog_urls(major_str):
+def _clean_program_label(label):
+    cleaned = _normalize_text(label)
+    cleaned = re.sub(r"^(Undergraduate|Graduate)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^(Major|Minor|Certificate|Emphasis)\s+in\s+", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+def _extract_link_pairs(soup, base_url):
+    pairs = []
+    for a in soup.find_all("a", href=True):
+        text = _normalize_text(a.get_text(" ", strip=True))
+        if not text:
+            continue
+        href = a["href"]
+        if not href.startswith("http"):
+            href = requests.compat.urljoin(base_url, href)
+        if "catalog.missouri.edu" not in href or href.endswith(".pdf"):
+            continue
+        pairs.append((text, href))
+    return pairs
+
+@lru_cache(maxsize=1)
+def _build_catalog_program_index():
+    index_entries = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 1) Degrees + emphasis index
     try:
-        resp = requests.get(DEGREE_INDEX_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get(DEGREE_INDEX_URL, headers=headers, timeout=10)
         resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for row in soup.find_all("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 2:
+                continue
+            primary_name = _normalize_text(cells[0].get_text(" ", strip=True))
+            for _, href in _extract_link_pairs(row, DEGREE_INDEX_URL):
+                if "/courseofferings/" in href:
+                    continue
+                index_entries.append({"name": primary_name, "type": "major", "url": href})
     except requests.RequestException:
+        pass
+
+    # 2) Minors + certificates index (crawl one level to college pages)
+    try:
+        resp = requests.get(ADDITIONAL_INDEX_URL, headers=headers, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        college_pages = []
+        for text, href in _extract_link_pairs(soup, ADDITIONAL_INDEX_URL):
+            if "additionalcertificatesminors" in href:
+                college_pages.append(href)
+            elif re.match(r"^(Minor|Certificate)\s+in\s+", text, re.IGNORECASE):
+                ptype = "minor" if text.upper().startswith("MINOR") else "certificate"
+                index_entries.append({"name": _clean_program_label(text), "type": ptype, "url": href})
+
+        for page_url in sorted(set(college_pages)):
+            try:
+                page_resp = requests.get(page_url, headers=headers, timeout=10)
+                page_resp.raise_for_status()
+                page_soup = BeautifulSoup(page_resp.text, "html.parser")
+                for text, href in _extract_link_pairs(page_soup, page_url):
+                    if re.match(r"^Minor in\s+.+", text, re.IGNORECASE):
+                        index_entries.append({"name": _clean_program_label(text), "type": "minor", "url": href})
+                    elif re.match(r"^(Undergraduate|Graduate)?\s*Certificate in\s+.+", text, re.IGNORECASE):
+                        index_entries.append({"name": _clean_program_label(text), "type": "certificate", "url": href})
+                    elif re.match(r"^Emphasis in\s+.+", text, re.IGNORECASE):
+                        index_entries.append({"name": _clean_program_label(text), "type": "emphasis", "url": href})
+            except requests.RequestException:
+                continue
+    except requests.RequestException:
+        pass
+
+    deduped = {}
+    for entry in index_entries:
+        if not entry["name"] or not entry["url"]:
+            continue
+        key = (entry["type"], _normalize_lookup_key(entry["name"]), entry["url"])
+        deduped[key] = entry
+    return list(deduped.values())
+
+def _discover_dynamic_catalog_urls(program_str, program_type="major"):
+    try:
+        entries = _build_catalog_program_index()
+    except Exception:
         return {}
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    major_key = _normalize_lookup_key(major_str)
+    program_key = _normalize_lookup_key(program_str)
+    query_tokens = set(_name_tokens(program_str))
+    target_type = (program_type or "").lower()
+
     candidates = []
-
-    for row in soup.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if len(cells) < 2:
+    for entry in entries:
+        entry_key = _normalize_lookup_key(entry["name"])
+        entry_tokens = set(_name_tokens(entry["name"]))
+        overlap = len(query_tokens & entry_tokens)
+        if overlap == 0 and program_key not in entry_key and entry_key not in program_key:
             continue
 
-        name = _normalize_text(cells[0].get_text(" ", strip=True))
-        if not name:
-            continue
-
-        name_key = _normalize_lookup_key(name)
-        if major_key not in name_key and name_key not in major_key:
-            continue
-
-        degree_links = []
-        for link in row.find_all("a", href=True):
-            href = link["href"]
-            text = _normalize_text(link.get_text(" ", strip=True)).upper()
-            if not href.startswith("http"):
-                href = requests.compat.urljoin(DEGREE_INDEX_URL, href)
-            if "catalog.missouri.edu" not in href:
-                continue
-            if any(skip in text for skip in ["MINOR", "CERT", "PHD", "MS", "MA", "MBA", "MACC", "EDD", "JD", "LLM", "DNP"]):
-                continue
-            if re.fullmatch(r"[A-Z.]+", text):
-                degree_links.append(href)
-
-        if degree_links:
-            candidates.append((name_key, degree_links[0]))
+        exact_bonus = 5 if entry_key == program_key else 0
+        type_bonus = 2 if target_type and entry["type"] == target_type else 0
+        score = overlap + exact_bonus + type_bonus
+        candidates.append((score, entry))
 
     if not candidates:
         return {}
 
-    exact_match = next((url for name_key, url in candidates if name_key == major_key), None)
-    if exact_match:
-        return {"CORE": exact_match}
+    best_match = max(candidates, key=lambda item: item[0])[1]
+    return {"CORE": best_match["url"]}
 
-    best_match = max(candidates, key=lambda item: len(set(item[0].split()) & set(major_key.split())))
-    return {"CORE": best_match[1]}
-
-def get_requirements(major_str, emphases=[]):
-    major_upper = major_str.upper()
+def get_requirements(program_str, emphases=None, program_type="major"):
+    if emphases is None:
+        emphases = []
+    major_upper = program_str.upper()
 
     for abbr, full_name in MAJOR_ALIASES.items():
         major_upper = re.sub(rf"\b{abbr}\b", full_name, major_upper)
@@ -611,7 +746,7 @@ def get_requirements(major_str, emphases=[]):
             if aggregated_reqs:
                 return aggregated_reqs
 
-    dynamic_urls = _discover_dynamic_catalog_urls(major_upper)
+    dynamic_urls = _discover_dynamic_catalog_urls(program_str, program_type=program_type)
     if dynamic_urls.get("CORE"):
         try:
             resp = requests.get(dynamic_urls["CORE"], headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -634,7 +769,7 @@ def _scrape(html, major_string, url="", summarize_emphasis=False):
             if t and len(t) < 80:
                 t_upper = t.upper()
                 
-                if any(x in t_upper for x in ["SEMESTER PLAN", "PLAN OF STUDY", "ONLINE", "SUMMARY", "GRADUATE", "MASTER", "MACC", "MINOR", "CERTIFICATE", "HONORS", "ACCELERATED"]):
+                if any(x in t_upper for x in ["SEMESTER PLAN", "PLAN OF STUDY", "ONLINE", "SUMMARY", "GRADUATE", "MASTER", "MACC", "HONORS", "ACCELERATED"]):
                     skip_section = True
                     continue
                 
@@ -657,7 +792,7 @@ def _scrape(html, major_string, url="", summarize_emphasis=False):
                 c_text = comment.get_text(strip=True)
                 if len(c_text) > 3:
                     c_up = c_text.upper()
-                    if any(x in c_up for x in ["GRADUATE", "MASTER", "MACC", "MINOR", "CERTIFICATE"]):
+                    if any(x in c_up for x in ["GRADUATE", "MASTER", "MACC"]):
                         skip_section = True
                         continue
                     else:
@@ -877,13 +1012,29 @@ def render_degree_audit(major, results, emphases):
 # ─────────────────────────────────────────────────────────────────
 # AI TOOLS (LIVE SCRAPING & EXPORT)
 # ─────────────────────────────────────────────────────────────────
+def _normalize_course_code(course_code: str) -> str:
+    code = course_code.upper().replace("_", " ").strip()
+    code = re.sub(r"\s+", " ", code)
+    return code
+
+def _extract_prerequisite_text(course_text: str) -> str:
+    flat = _normalize_text(course_text)
+    match = re.search(
+        r"Prerequisite[s]?:\s*(.*?)(?:\s*(?:Corequisite[s]?:|Recommended:|Credit(s)?\s*:|$))",
+        flat,
+        flags=re.IGNORECASE,
+    )
+    return _normalize_text(match.group(1)) if match else ""
+
 def get_course_details(course_code: str) -> dict:
-    clean_code = course_code.upper().strip()
-    match = re.match(r"([A-Z\s]+)\s+(\d+\w*)", clean_code)
+    clean_code = _normalize_course_code(course_code)
+    match = re.match(r"^([A-Z][A-Z&\s]+)\s+(\d{4}[A-Z]?)$", clean_code)
     if not match:
         return {"error": f"Invalid course code format: {clean_code}"}
         
     subject = match.group(1).strip()
+    number = match.group(2).strip()
+    target_code = _normalize_course_code(f"{subject} {number}")
     subject_url = subject.replace(" ", "_").lower()
     url = f"https://catalog.missouri.edu/courseofferings/{subject_url}/"
     
@@ -895,18 +1046,25 @@ def get_course_details(course_code: str) -> dict:
             
         soup = BeautifulSoup(resp.text, "html.parser")
         blocks = soup.find_all("div", class_="courseblock")
-        search_str_1 = clean_code
-        search_str_2 = clean_code.replace(" ", "_")
-        
+
         for block in blocks:
-            text = block.get_text(separator=" | ", strip=True)
-            if search_str_1 in text.upper() or search_str_2 in text.upper():
+            title_node = block.find("p", class_="courseblocktitle")
+            title_text = _normalize_text(title_node.get_text(" ", strip=True) if title_node else block.get_text(" ", strip=True))
+            code_match = re.search(r"([A-Z][A-Z&\s_]+)\s+(\d{4}[A-Z]?)", title_text.upper())
+            if not code_match:
+                continue
+
+            block_code = _normalize_course_code(f"{code_match.group(1).replace('_', ' ')} {code_match.group(2)}")
+            if block_code == target_code:
+                full_text = block.get_text(separator=" ", strip=True)
+                prereq_text = _extract_prerequisite_text(full_text)
                 return {
-                    "course": clean_code,
-                    "catalog_data": text 
+                    "course": target_code,
+                    "catalog_data": _normalize_text(full_text),
+                    "prerequisites": prereq_text or "No explicit prerequisite listed.",
                 }
                 
-        return {"error": f"Course {clean_code} not found on the live {subject} catalog page."}
+        return {"error": f"Course {target_code} not found on the live {subject} catalog page."}
     except Exception as e:
         return {"error": f"Failed to fetch course details: {str(e)}"}
 
@@ -981,17 +1139,20 @@ def init_chat_session(transcript_data, gap_analysis_results):
     Your goal is to help students navigate their degree path based strictly on the gap analysis provided.
     
     CRITICAL RULES:
-    1. Prerequisite Checking: NEVER recommend a course without calling 'get_course_details' to ensure the student has completed its prerequisites.
+    1. Prerequisite Checking: Before recommending a course, verify prerequisites using live course catalog lookup.
     2. Semester Balancing: A standard semester is 12-15 credits. Do not recommend more than 2 high-level technical classes (engineering/finance/acct) in a single semester.
     3. Use Mizzou-themed language when appropriate (e.g., refer to 'myZou' or use 'Tiger' metaphors).
-    4. Exporting: When the student agrees on a final list of classes for next semester, use the 'export_schedule' tool.
+    4. Exporting: When the student agrees on a final list of classes for next semester, export a CSV schedule for them.
+    5. Never mention internal function or tool names in your responses.
     """
 
     compact_gap = _build_compact_gap_context(gap_analysis_results)
+    program_labels = [f"{p['type'].title()}: {p['name']}" for p in transcript_data.get("programs", [])]
     student_context = f"""
     Here is the student's academic profile:
     Name: {transcript_data['name']}
     Majors: {', '.join(transcript_data['majors'])}
+    Programs: {', '.join(program_labels) if program_labels else 'None'}
     Emphases: {', '.join(transcript_data['emphases']) if transcript_data['emphases'] else 'None'}
     GPA: {transcript_data['gpa']}
     
@@ -1024,12 +1185,19 @@ def main():
                 st.session_state.transcript = t
                 
                 all_results = {}
-                if t["majors"]:
-                    for major in t["majors"]:
-                        # Pass the dynamically parsed emphases to the scraper
-                        reqs = get_requirements(major, t["emphases"])
-                        if reqs:
-                            all_results[major] = gap_analysis(t["courses"], reqs)
+                programs = t.get("programs", [])
+                if not programs and t["majors"]:
+                    programs = [{"type": "major", "name": m} for m in t["majors"]]
+
+                for program in programs:
+                    reqs = get_requirements(
+                        program["name"],
+                        emphases=t["emphases"],
+                        program_type=program.get("type", "major"),
+                    )
+                    if reqs:
+                        label = f"{program.get('type', 'program').title()}: {program['name']}"
+                        all_results[label] = gap_analysis(t["courses"], reqs)
                 
                 chat_client, chat_session, first_msg = init_chat_session(t, all_results)
 
@@ -1057,7 +1225,7 @@ def main():
                 for major, results in st.session_state.gap_analysis.items():
                     render_degree_audit(major, results, t["emphases"])
             else:
-                st.warning("No Major detected on transcript. AI will generalize.")
+                st.warning("No academic program detected on transcript. AI will generalize.")
 
         # ─────────────────────────────────────────────────────────────────────
         # TAB 1: AI CHAT
@@ -1088,6 +1256,8 @@ def main():
                 with st.expander("📋 View Summary of Your Transcript Profile (Optional)"):
                     st.write(f"**Parsed Name:** {t['name']}")
                     st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
+                    st.write(f"**Parsed Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
+                    st.write(f"**Parsed Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
                     st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
 
                 for msg in st.session_state.messages:
