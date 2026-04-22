@@ -1115,6 +1115,8 @@ def _build_compact_gap_context(gap_analysis_results, max_items_per_major=30):
             }
             for r in summaries[:10]
         ]
+        in_progress_codes = sorted({r.get("code", "") for r in in_progress if r.get("code", "") and r.get("code", "") != "EMPHASIS"})
+        outstanding_codes = sorted({r.get("code", "") for r in outstanding if r.get("code", "") and r.get("code", "") != "EMPHASIS"})
 
         compact[major] = {
             "counts": {
@@ -1126,6 +1128,8 @@ def _build_compact_gap_context(gap_analysis_results, max_items_per_major=30):
             },
             "top_outstanding": top_outstanding,
             "top_in_progress": top_in_progress,
+            "in_progress_codes_all": in_progress_codes,
+            "outstanding_codes_all": outstanding_codes,
             "emphasis_summaries": emphasis_summaries,
         }
     return compact
@@ -1144,6 +1148,8 @@ def init_chat_session(transcript_data, gap_analysis_results):
     3. Use Mizzou-themed language when appropriate (e.g., refer to 'myZou' or use 'Tiger' metaphors).
     4. Exporting: When the student agrees on a final list of classes for next semester, export a CSV schedule for them.
     5. Never mention internal function or tool names in your responses.
+    6. Never recommend a course for a future semester if it is already marked In Progress in the student's record.
+    7. Do not recommend a course and one of its prerequisites in the same semester plan.
     """
 
     compact_gap = _build_compact_gap_context(gap_analysis_results)
@@ -1158,6 +1164,9 @@ def init_chat_session(transcript_data, gap_analysis_results):
     
     Here is their compact Degree Gap Analysis (JSON):
     {json.dumps(compact_gap, indent=2)}
+
+    Interpret any course listed under `in_progress_codes_all` as unavailable for future-semester recommendations.
+    Also avoid placing a course in the same semester as any of its prerequisites.
     
     Introduce yourself to the student (using a Black & Gold Tiger flavor) and ask what term they are scheduling for.
     """
