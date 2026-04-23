@@ -450,7 +450,10 @@ def _normalize_focus_name(name):
 
 def _fetch_detailed_sections_for_emphasis(program_label, emphasis_name):
     program_type, program_name = _parse_program_label(program_label)
-    upper_name = program_name.upper()
+    normalized_name = program_name.upper()
+    for abbr, full_name in MAJOR_ALIASES.items():
+        normalized_name = re.sub(rf"\b{abbr}\b", full_name, normalized_name)
+    upper_name = normalized_name
 
     # Business: use emphasis-specific page for most-complete requirement sections.
     if "BUSINESS" in upper_name or "ACCOUNTANCY" in upper_name:
@@ -469,7 +472,7 @@ def _fetch_detailed_sections_for_emphasis(program_label, emphasis_name):
                 pass
 
     # Generic path for Data Science and any other programs.
-    dynamic = _discover_dynamic_catalog_urls(program_name, program_type=program_type)
+    dynamic = _discover_dynamic_catalog_urls(normalized_name, program_type=program_type)
     core_url = dynamic.get("CORE")
     if not core_url:
         return {}, emphasis_name
@@ -477,7 +480,7 @@ def _fetch_detailed_sections_for_emphasis(program_label, emphasis_name):
         resp = requests.get(core_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         if resp.status_code != 200:
             return {}, emphasis_name
-        return _scrape(resp.text, program_name.upper(), core_url, summarize_emphasis=False), emphasis_name
+        return _scrape(resp.text, normalized_name, core_url, summarize_emphasis=False), emphasis_name
     except requests.RequestException:
         return {}, emphasis_name
 
