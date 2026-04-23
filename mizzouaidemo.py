@@ -622,59 +622,70 @@ def _business_section_label(section_name, program_name=""):
     return section
 
 def _parse_business_requirements_from_text(soup, program_name):
-    parsed_sections = {}
+    parsed_sections = {"Uncategorized": []}
     section_required_count = {}
-    current_section = None
+    current_section = "Uncategorized"
 
-    select_count_re = re.compile(r"^(?:Select|Choose)\s+(\d+)\b", re.IGNORECASE)
+    select_count_re = re.compile(r"(?:Select|Choose)\s+(\d+)\b", re.IGNORECASE)
     code_re = re.compile(r"([A-Z][A-Z_&\s]+ \d{4}[A-Z]?)")
 
     for table in soup.find_all("table", class_="sc_courselist"):
         for row in table.find_all("tr"):
-            section_span = row.find("span", class_="courselistcomment") or row.find("span", class_="areaheader")
-            if section_span:
-                section_text = _normalize_text(section_span.get_text(" ", strip=True))
-                if section_text:
-                    current_section = _business_section_label(section_text, program_name)
-                    parsed_sections.setdefault(current_section, [])
-
             row_text = _normalize_text(row.get_text(" ", strip=True))
-            if current_section:
-                select_match = select_count_re.search(row_text)
-                if select_match:
-                    section_required_count[current_section] = int(select_match.group(1))
 
             code_td = row.find("td", class_="codecol")
-            if not code_td or not current_section:
+            if code_td and current_section:
+                raw_code_text = _normalize_text(code_td.get_text(" ", strip=True)).replace("\xa0", " ").replace("_", " ")
+                if not raw_code_text:
+                    continue
+
+                is_alt = "orclass" in (row.get("class") or []) or bool(re.search(r"^\s*or\b", raw_code_text, re.IGNORECASE))
+                raw_code_text = re.sub(r"^\s*or\b", "", raw_code_text, flags=re.IGNORECASE).strip()
+                code_match = code_re.search(raw_code_text.upper())
+                if not code_match:
+                    continue
+                code = _normalize_text(code_match.group(1)).upper()
+
+                title_td = row.find("td", class_="titlecol")
+                title = _normalize_text(title_td.get_text(" ", strip=True)) if title_td else ""
+
+                credits = 3.0
+                hours_td = row.find("td", class_="hourscol")
+                if hours_td:
+                    hours_text = _normalize_text(hours_td.get_text(" ", strip=True))
+                    credits_match = re.search(r"(\d+(?:\.\d+)?)", hours_text)
+                    if credits_match:
+                        credits = float(credits_match.group(1))
+
+                clean_code = f"OR {code}" if is_alt else code
+                if not any(existing[0] == clean_code for existing in parsed_sections[current_section]):
+                    parsed_sections[current_section].append((clean_code, title, credits))
                 continue
 
-            raw_code_text = _normalize_text(code_td.get_text(" ", strip=True)).replace("\xa0", " ").replace("_", " ")
-            if not raw_code_text:
+            if re.fullmatch(r"\d+(?:\.\d+)?", row_text):
                 continue
 
-            is_alt = "orclass" in (row.get("class") or []) or bool(re.search(r"^\s*or\b", raw_code_text, re.IGNORECASE))
-            raw_code_text = re.sub(r"^\s*or\b", "", raw_code_text, flags=re.IGNORECASE).strip()
-            code_match = code_re.search(raw_code_text.upper())
-            if not code_match:
+            header_span = row.find("span", class_=["areaheader", "courselistcomment"])
+            header_text = _normalize_text(header_span.get_text(" ", strip=True)) if header_span else ""
+            section_candidate = header_text or row_text
+
+            select_match = select_count_re.search(section_candidate)
+            if select_match and current_section:
+                section_required_count[current_section] = int(select_match.group(1))
                 continue
-            code = _normalize_text(code_match.group(1)).upper()
 
-            title_td = row.find("td", class_="titlecol")
-            title = _normalize_text(title_td.get_text(" ", strip=True)) if title_td else ""
-
-            credits = 3.0
-            hours_td = row.find("td", class_="hourscol")
-            if hours_td:
-                hours_text = _normalize_text(hours_td.get_text(" ", strip=True))
-                credits_match = re.search(r"(\d+(?:\.\d+)?)", hours_text)
-                if credits_match:
-                    credits = float(credits_match.group(1))
-
-            clean_code = f"OR {code}" if is_alt else code
-            if not any(existing[0] == clean_code for existing in parsed_sections[current_section]):
-                parsed_sections[current_section].append((clean_code, title, credits))
+            if section_candidate and (
+                re.search(r"(Courses|Requirements)\s*$", section_candidate, re.IGNORECASE)
+                or re.fullmatch(r"Capstone", section_candidate, re.IGNORECASE)
+            ):
+                current_section = _business_section_label(section_candidate, program_name)
+                parsed_sections.setdefault(current_section, [])
+                continue
 
     result = {}
+    if not parsed_sections.get("Uncategorized"):
+        parsed_sections.pop("Uncategorized", None)
+
     for section_name, courses in parsed_sections.items():
         if not courses:
             continue
