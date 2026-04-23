@@ -462,6 +462,9 @@ def get_emphasis_course_options(emphasis_name):
             if section_kind not in {"required", "additional", "support"}:
                 continue
             for code, title, credits in courses:
+                if code.startswith("OR "):
+                    # Treat OR alternatives as the same requirement group; don't display both options.
+                    continue
                 clean_code = code.replace("OR ", "").strip()
                 if not clean_code:
                     continue
@@ -514,12 +517,10 @@ def _parse_business_requirements_from_text(soup, program_name):
     if not block:
         return {}
 
-    section_defs = []
-    ordered_courses = []
+    parsed_sections = {}
     current_section = None
 
     section_line_re = re.compile(r"^(?P<label>.+?(?:Courses|Requirements))\s+(?P<credits>\d+(?:\.\d+)?)$")
-    select_credit_re = re.compile(r"^(?:Select|Choose).+?:\s*(\d+(?:\.\d+)?)$")
     course_re = re.compile(r"^(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$")
     or_course_re = re.compile(r"^or\s+(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$", re.IGNORECASE)
 
@@ -528,20 +529,14 @@ def _parse_business_requirements_from_text(soup, program_name):
         line = block[i]
         section_match = section_line_re.match(line)
         if section_match:
-            current_section = {
-                "name": _business_section_label(section_match.group("label"), program_name),
-                "target_credits": float(section_match.group("credits")),
-            }
-            section_defs.append(current_section)
+            current_section = _business_section_label(section_match.group("label"), program_name)
+            parsed_sections.setdefault(current_section, [])
             i += 1
             continue
 
-        if current_section and current_section.get("target_credits") is None:
-            select_match = select_credit_re.match(line)
-            if select_match:
-                current_section["target_credits"] = float(select_match.group(1))
-                i += 1
-                continue
+        if not current_section:
+            i += 1
+            continue
 
         code = None
         is_alt = False
@@ -558,34 +553,14 @@ def _parse_business_requirements_from_text(soup, program_name):
             title = ""
             if i + 1 < len(block):
                 next_line = block[i + 1]
-                if not section_line_re.match(next_line) and not select_credit_re.match(next_line) and not course_re.match(next_line) and not or_course_re.match(next_line):
+                if not section_line_re.match(next_line) and not course_re.match(next_line) and not or_course_re.match(next_line):
                     title = next_line
                     i += 1
-            ordered_courses.append((f"OR {code}" if is_alt else code, title, 3.0))
+            clean_code = f"OR {code}" if is_alt else code
+            if not any(existing[0] == clean_code for existing in parsed_sections[current_section]):
+                parsed_sections[current_section].append((clean_code, title, 3.0))
 
         i += 1
-
-    if not section_defs or not ordered_courses:
-        return {}
-
-    parsed_sections = {section["name"]: [] for section in section_defs}
-    section_index = 0
-    applied_credits = 0.0
-
-    for code, title, credits in ordered_courses:
-        while section_index < len(section_defs) - 1:
-            target = section_defs[section_index]["target_credits"]
-            if target and applied_credits >= target:
-                section_index += 1
-                applied_credits = 0.0
-            else:
-                break
-
-        current_name = section_defs[section_index]["name"]
-        if not any(existing[0] == code for existing in parsed_sections[current_name]):
-            parsed_sections[current_name].append((code, title, credits))
-        if not code.startswith("OR "):
-            applied_credits += credits
 
     return {name: courses for name, courses in parsed_sections.items() if courses}
 
@@ -1109,7 +1084,7 @@ def render_degree_audit(major, results, emphases):
                         {
                             "code": opt["code"],
                             "title": opt["title"] if opt["title"] else "",
-                            "status": "⚪ Option",
+                            "status": "ℹ️ Required" if opt.get("section_type") in {"required", "support"} else "⚪ Optional",
                             "grade": "—",
                         }
                         for opt in options
