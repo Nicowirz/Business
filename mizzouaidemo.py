@@ -43,6 +43,7 @@ st.set_page_config(
 MIZZOU_GOLD = "#F1B82D"
 MIZZOU_BLACK = "#000000"
 MIZZOU_GREY = "#E1E1E1"
+EMPHASIS_OPTIONS_CACHE_VERSION = "v2"
 
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
@@ -507,7 +508,7 @@ def _classify_emphasis_section(section_name, emphasis_name):
     return ""
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_emphasis_course_options(program_label, emphasis_name):
+def get_emphasis_course_options(program_label, emphasis_name, cache_version=EMPHASIS_OPTIONS_CACHE_VERSION):
     section_map, normalized_emphasis = _fetch_detailed_sections_for_emphasis(program_label, emphasis_name)
     if not section_map:
         return []
