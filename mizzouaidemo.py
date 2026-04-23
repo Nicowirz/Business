@@ -649,13 +649,19 @@ def _parse_business_requirements_from_text(soup, program_name):
     i = 0
     while i < len(block):
         line = block[i]
-        if re.search(r"(Courses|Requirements)\s*$", line, re.IGNORECASE) and i + 1 < len(block):
-            maybe_credits = block[i + 1]
-            if re.fullmatch(r"\d+(?:\.\d+)?", maybe_credits):
-                current_section = _business_section_label(line, program_name)
-                parsed_sections.setdefault(current_section, [])
-                i += 2
-                continue
+        is_section_header = bool(
+            re.search(r"(Courses|Requirements)\s*$", line, re.IGNORECASE)
+            or re.fullmatch(r"Capstone", line, re.IGNORECASE)
+        )
+        if is_section_header:
+            current_section = _business_section_label(line, program_name)
+            parsed_sections.setdefault(current_section, [])
+            i += 1
+            continue
+
+        if re.fullmatch(r"\d+(?:\.\d+)?", line):
+            i += 1
+            continue
 
         if not current_section:
             i += 1
@@ -684,8 +690,7 @@ def _parse_business_requirements_from_text(soup, program_name):
                 next_line = block[i + 1]
                 next_is_section_header = bool(
                     re.search(r"(Courses|Requirements)\s*$", next_line, re.IGNORECASE)
-                    and i + 2 < len(block)
-                    and re.fullmatch(r"\d+(?:\.\d+)?", block[i + 2])
+                    or re.fullmatch(r"Capstone", next_line, re.IGNORECASE)
                 )
                 if (
                     not next_is_section_header
