@@ -396,6 +396,63 @@ def _build_emphasis_phrase_pattern(emphasis_name):
         return ""
     return r"\s*(?:&|AND)?\s*".join(re.escape(token) for token in tokens)
 
+def _best_business_emphasis_url(target_emphasis):
+    target_tokens = set(_name_tokens(target_emphasis))
+    if not target_tokens:
+        return ""
+
+    best_score = 0
+    best_url = ""
+    for key, url in CATALOG_URLS.get("BUSINESS", {}).items():
+        if key == "CORE":
+            continue
+        try:
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+            emphasis_name = _extract_business_emphasis_name(soup)
+            if not emphasis_name:
+                continue
+            overlap = len(set(_name_tokens(emphasis_name)) & target_tokens)
+            if overlap > best_score:
+                best_score = overlap
+                best_url = url
+        except requests.RequestException:
+            continue
+    return best_url
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_emphasis_course_options(emphasis_name):
+    url = _best_business_emphasis_url(emphasis_name)
+    if not url:
+        return []
+
+    try:
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if resp.status_code != 200:
+            return []
+        scraped = _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False)
+    except requests.RequestException:
+        return []
+
+    options = []
+    for section, courses in scraped.items():
+        if not _is_business_emphasis_section(section, emphasis_name):
+            continue
+        for code, title, credits in courses:
+            clean_code = code.replace("OR ", "").strip()
+            label = f"{clean_code} - {title}" if title else clean_code
+            if clean_code and not any(o["code"] == clean_code for o in options):
+                options.append(
+                    {
+                        "code": clean_code,
+                        "label": label,
+                        "credits": credits,
+                    }
+                )
+    return options
+
 def _business_section_label(section_name, program_name=""):
     section = _normalize_text(section_name)
     section_upper = section.upper()
@@ -1006,6 +1063,22 @@ def render_degree_audit(major, results, emphases):
             ]
         )
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+        for idx, row in enumerate(emphasis_summaries):
+            emphasis_area = row["section"].replace(" Emphasis Options", "").replace("Advanced/Experimental Focus - ", "").strip()
+            with st.expander(f"Course Options: {emphasis_area}", expanded=False):
+                options = get_emphasis_course_options(emphasis_area)
+                if not options:
+                    st.caption("No option list could be loaded for this emphasis from the live catalog.")
+                    continue
+
+                select_values = [f"{opt['label']} ({opt['credits']} cr)" for opt in options]
+                st.selectbox(
+                    "Choose a course option to review",
+                    options=select_values,
+                    index=0,
+                    key=f"emphasis_option_{major}_{idx}",
+                )
 
     for section, rows in detailed_sections.items():
         section_df = pd.DataFrame(rows)[["code", "title", "status", "grade"]]
