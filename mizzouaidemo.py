@@ -432,13 +432,18 @@ def get_emphasis_course_options(emphasis_name):
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         if resp.status_code != 200:
             return []
+        soup = BeautifulSoup(resp.text, "html.parser")
+        page_emphasis_name = _extract_business_emphasis_name(soup) or emphasis_name
         scraped = _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False)
     except requests.RequestException:
         return []
 
     options = []
     for section, courses in scraped.items():
-        if not _is_business_emphasis_section(section, emphasis_name):
+        section_name = section
+        if " Emphasis: " in section_name:
+            section_name = section_name.split(" Emphasis: ", 1)[1].strip()
+        if not _is_business_emphasis_section(section_name, page_emphasis_name):
             continue
         for code, title, credits in courses:
             clean_code = code.replace("OR ", "").strip()
