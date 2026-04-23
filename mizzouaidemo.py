@@ -642,7 +642,6 @@ def _parse_business_requirements_from_text(soup, program_name):
     section_required_count = {}
     current_section = None
 
-    section_line_re = re.compile(r"^(?P<label>.+?(?:Courses|Requirements))\s+(?P<credits>\d+(?:\.\d+)?)$")
     select_count_re = re.compile(r"^(?:Select|Choose)\s+(\d+)\b", re.IGNORECASE)
     course_re = re.compile(r"^(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$")
     or_course_re = re.compile(r"^or\s+(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$", re.IGNORECASE)
@@ -650,12 +649,13 @@ def _parse_business_requirements_from_text(soup, program_name):
     i = 0
     while i < len(block):
         line = block[i]
-        section_match = section_line_re.match(line)
-        if section_match:
-            current_section = _business_section_label(section_match.group("label"), program_name)
-            parsed_sections.setdefault(current_section, [])
-            i += 1
-            continue
+        if re.search(r"(Courses|Requirements)\s*$", line, re.IGNORECASE) and i + 1 < len(block):
+            maybe_credits = block[i + 1]
+            if re.fullmatch(r"\d+(?:\.\d+)?", maybe_credits):
+                current_section = _business_section_label(line, program_name)
+                parsed_sections.setdefault(current_section, [])
+                i += 2
+                continue
 
         if not current_section:
             i += 1
@@ -682,7 +682,17 @@ def _parse_business_requirements_from_text(soup, program_name):
             title = ""
             if i + 1 < len(block):
                 next_line = block[i + 1]
-                if not section_line_re.match(next_line) and not course_re.match(next_line) and not or_course_re.match(next_line):
+                next_is_section_header = bool(
+                    re.search(r"(Courses|Requirements)\s*$", next_line, re.IGNORECASE)
+                    and i + 2 < len(block)
+                    and re.fullmatch(r"\d+(?:\.\d+)?", block[i + 2])
+                )
+                if (
+                    not next_is_section_header
+                    and not re.fullmatch(r"\d+(?:\.\d+)?", next_line)
+                    and not course_re.match(next_line)
+                    and not or_course_re.match(next_line)
+                ):
                     title = next_line
                     i += 1
             clean_code = f"OR {code}" if is_alt else code
