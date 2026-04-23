@@ -553,6 +553,22 @@ def get_emphasis_course_options(program_label, emphasis_name):
                     }
                 )
     _collect(section_map)
+
+    # Fallback: for business emphases, always retry with direct table scrape if first pass is empty.
+    if not options:
+        url = _best_business_emphasis_url(emphasis_name)
+        if url:
+            try:
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    fallback_emphasis = _extract_business_emphasis_name(soup) or normalized_emphasis
+                    fallback_sections = _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False)
+                    normalized_emphasis = fallback_emphasis
+                    _collect(fallback_sections)
+            except requests.RequestException:
+                pass
+
     return options
 
 def _business_section_label(section_name, program_name=""):
