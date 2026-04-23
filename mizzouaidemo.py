@@ -622,89 +622,57 @@ def _business_section_label(section_name, program_name=""):
     return section
 
 def _parse_business_requirements_from_text(soup, program_name):
-    lines = [_normalize_text(text) for text in soup.stripped_strings]
-    start_idx = next((i for i, line in enumerate(lines) if line == "Major Program Requirements"), None)
-    if start_idx is None:
-        return {}
-
-    end_markers = {"Semester Plan", "Degree Audit", "Major and Career Exploration"}
-    block = []
-    for line in lines[start_idx + 1:]:
-        if line in end_markers:
-            break
-        if line:
-            block.append(line)
-
-    if not block:
-        return {}
-
     parsed_sections = {}
     section_required_count = {}
     current_section = None
 
     select_count_re = re.compile(r"^(?:Select|Choose)\s+(\d+)\b", re.IGNORECASE)
-    course_re = re.compile(r"^(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$")
-    or_course_re = re.compile(r"^or\s+(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$", re.IGNORECASE)
+    code_re = re.compile(r"([A-Z][A-Z_&\s]+ \d{4}[A-Z]?)")
 
-    i = 0
-    while i < len(block):
-        line = block[i]
-        is_section_header = bool(
-            re.search(r"(Courses|Requirements)\s*$", line, re.IGNORECASE)
-            or re.fullmatch(r"Capstone", line, re.IGNORECASE)
-        )
-        if is_section_header:
-            current_section = _business_section_label(line, program_name)
-            parsed_sections.setdefault(current_section, [])
-            i += 1
-            continue
+    for table in soup.find_all("table", class_="sc_courselist"):
+        for row in table.find_all("tr"):
+            section_span = row.find("span", class_="courselistcomment") or row.find("span", class_="areaheader")
+            if section_span:
+                section_text = _normalize_text(section_span.get_text(" ", strip=True))
+                if section_text:
+                    current_section = _business_section_label(section_text, program_name)
+                    parsed_sections.setdefault(current_section, [])
 
-        if re.fullmatch(r"\d+(?:\.\d+)?", line):
-            i += 1
-            continue
+            row_text = _normalize_text(row.get_text(" ", strip=True))
+            if current_section:
+                select_match = select_count_re.search(row_text)
+                if select_match:
+                    section_required_count[current_section] = int(select_match.group(1))
 
-        if not current_section:
-            i += 1
-            continue
+            code_td = row.find("td", class_="codecol")
+            if not code_td or not current_section:
+                continue
 
-        select_match = select_count_re.match(line)
-        if select_match:
-            section_required_count[current_section] = int(select_match.group(1))
-            i += 1
-            continue
+            raw_code_text = _normalize_text(code_td.get_text(" ", strip=True)).replace("\xa0", " ").replace("_", " ")
+            if not raw_code_text:
+                continue
 
-        code = None
-        is_alt = False
-        or_match = or_course_re.match(line)
-        if or_match:
-            code = _normalize_text(or_match.group("code")).upper()
-            is_alt = True
-        else:
-            course_match = course_re.match(line)
-            if course_match:
-                code = _normalize_text(course_match.group("code")).upper()
+            is_alt = "orclass" in (row.get("class") or []) or bool(re.search(r"^\s*or\b", raw_code_text, re.IGNORECASE))
+            raw_code_text = re.sub(r"^\s*or\b", "", raw_code_text, flags=re.IGNORECASE).strip()
+            code_match = code_re.search(raw_code_text.upper())
+            if not code_match:
+                continue
+            code = _normalize_text(code_match.group(1)).upper()
 
-        if code:
-            title = ""
-            if i + 1 < len(block):
-                next_line = block[i + 1]
-                next_is_section_header = bool(
-                    re.search(r"(Courses|Requirements)\s*$", next_line, re.IGNORECASE)
-                    or re.fullmatch(r"Capstone", next_line, re.IGNORECASE)
-                )
-                if (
-                    not next_is_section_header
-                    and not re.fullmatch(r"\d+(?:\.\d+)?", next_line)
-                    and not course_re.match(next_line)
-                    and not or_course_re.match(next_line)
-                ):
-                    title = next_line
-                    i += 1
+            title_td = row.find("td", class_="titlecol")
+            title = _normalize_text(title_td.get_text(" ", strip=True)) if title_td else ""
+
+            credits = 3.0
+            hours_td = row.find("td", class_="hourscol")
+            if hours_td:
+                hours_text = _normalize_text(hours_td.get_text(" ", strip=True))
+                credits_match = re.search(r"(\d+(?:\.\d+)?)", hours_text)
+                if credits_match:
+                    credits = float(credits_match.group(1))
+
             clean_code = f"OR {code}" if is_alt else code
             if not any(existing[0] == clean_code for existing in parsed_sections[current_section]):
-                parsed_sections[current_section].append((clean_code, title, 3.0))
-
-        i += 1
+                parsed_sections[current_section].append((clean_code, title, credits))
 
     result = {}
     for section_name, courses in parsed_sections.items():
