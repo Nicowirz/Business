@@ -308,9 +308,25 @@ def _merge_reqs(target, source):
         if k not in target:
             target[k] = v
         else:
-            for item in v:
-                if item[0] not in [x[0] for x in target[k]]:
-                    target[k].append(item)
+            existing = target[k]
+            if isinstance(existing, dict) and isinstance(v, dict):
+                if existing.get("type") == "pool" and v.get("type") == "pool":
+                    existing["required_count"] = max(int(existing.get("required_count", 0)), int(v.get("required_count", 0)))
+                    existing["options"] = list(dict.fromkeys((existing.get("options", []) + v.get("options", []))))
+                    existing_items = existing.get("items", [])
+                    for item in v.get("items", []):
+                        if not any(e[0] == item[0] for e in existing_items):
+                            existing_items.append(item)
+                    existing["items"] = existing_items
+                    target[k] = existing
+                else:
+                    target[k] = existing
+            elif isinstance(existing, list) and isinstance(v, list):
+                for item in v:
+                    if item[0] not in [x[0] for x in existing]:
+                        existing.append(item)
+            else:
+                target[k] = existing if isinstance(existing, dict) else v
 
 def _sum_required_credits(courses):
     return sum(credits for code, _, credits in courses if not code.startswith("OR "))
@@ -623,9 +639,11 @@ def _parse_business_requirements_from_text(soup, program_name):
         return {}
 
     parsed_sections = {}
+    section_required_count = {}
     current_section = None
 
     section_line_re = re.compile(r"^(?P<label>.+?(?:Courses|Requirements))\s+(?P<credits>\d+(?:\.\d+)?)$")
+    select_count_re = re.compile(r"^(?:Select|Choose)\s+(\d+)\b", re.IGNORECASE)
     course_re = re.compile(r"^(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$")
     or_course_re = re.compile(r"^or\s+(?P<code>[A-Z][A-Z_&\s]+ \d{4}[A-Z]?)$", re.IGNORECASE)
 
@@ -640,6 +658,12 @@ def _parse_business_requirements_from_text(soup, program_name):
             continue
 
         if not current_section:
+            i += 1
+            continue
+
+        select_match = select_count_re.match(line)
+        if select_match:
+            section_required_count[current_section] = int(select_match.group(1))
             i += 1
             continue
 
@@ -667,7 +691,33 @@ def _parse_business_requirements_from_text(soup, program_name):
 
         i += 1
 
-    return {name: courses for name, courses in parsed_sections.items() if courses}
+    result = {}
+    for section_name, courses in parsed_sections.items():
+        if not courses:
+            continue
+        required_count = section_required_count.get(section_name)
+        if required_count:
+            grouped = []
+            for code, title, credits in courses:
+                if code.startswith("OR ") and grouped:
+                    grouped[-1].append((code, title, credits))
+                else:
+                    grouped.append([(code, title, credits)])
+            options = []
+            for group in grouped:
+                codes = [c.replace("OR ", "").strip() for c, _, _ in group if c.replace("OR ", "").strip()]
+                if codes:
+                    options.append(" OR ".join(codes))
+            result[section_name] = {
+                "requirement_name": section_name,
+                "type": "pool",
+                "required_count": required_count,
+                "options": options,
+                "items": courses,
+            }
+        else:
+            result[section_name] = courses
+    return result
 
 def _parse_business_upper_level_from_text(soup):
     lines = [_normalize_text(text) for text in soup.stripped_strings]
@@ -932,14 +982,24 @@ def get_requirements(program_str, emphases=None, program_type="major"):
 def _scrape(html, major_string, url="", summarize_emphasis=False):
     soup = BeautifulSoup(html, "html.parser")
     sections = {}
+    section_required_count = {}
     current = "Requirements"
     skip_section = False
+    select_count_re = re.compile(r"^(?:Select|Choose)\s+(\d+)\b", re.IGNORECASE)
 
     for tag in soup.find_all(["h2", "h3", "h4", "tr"]):
         # 1. Parse high-level headers
         if tag.name in ("h2", "h3", "h4"):
             t = tag.get_text(strip=True)
             if t and len(t) < 80:
+                select_match = select_count_re.match(t)
+                if select_match and current:
+                    section_required_count[current] = max(
+                        section_required_count.get(current, 0),
+                        int(select_match.group(1)),
+                    )
+                    continue
+
                 t_upper = t.upper()
                 
                 if any(x in t_upper for x in ["SEMESTER PLAN", "PLAN OF STUDY", "ONLINE", "SUMMARY", "GRADUATE", "MASTER", "MACC", "HONORS", "ACCELERATED"]):
@@ -964,6 +1024,14 @@ def _scrape(html, major_string, url="", summarize_emphasis=False):
             if comment:
                 c_text = comment.get_text(strip=True)
                 if len(c_text) > 3:
+                    select_match = select_count_re.match(c_text)
+                    if select_match and current:
+                        section_required_count[current] = max(
+                            section_required_count.get(current, 0),
+                            int(select_match.group(1)),
+                        )
+                        continue
+
                     c_up = c_text.upper()
                     if any(x in c_up for x in ["GRADUATE", "MASTER", "MACC"]):
                         skip_section = True
@@ -1004,12 +1072,39 @@ def _scrape(html, major_string, url="", summarize_emphasis=False):
                 if not any(c[0] == clean_code for c in sections[current]):
                     sections[current].append((clean_code, title, 3))
 
+    for section_name, required_count in section_required_count.items():
+        courses = sections.get(section_name, [])
+        if not courses:
+            continue
+        grouped = []
+        for code, title, credits in courses:
+            if code.startswith("OR ") and grouped:
+                grouped[-1].append((code, title, credits))
+            else:
+                grouped.append([(code, title, credits)])
+        options = []
+        for group in grouped:
+            codes = [c.replace("OR ", "").strip() for c, _, _ in group if c.replace("OR ", "").strip()]
+            if codes:
+                options.append(" OR ".join(codes))
+        sections[section_name] = {
+            "requirement_name": section_name,
+            "type": "pool",
+            "required_count": int(required_count),
+            "options": options,
+            "items": courses,
+        }
+
     # 3. DYNAMIC GROUPING & SUMMARIZATION
     processed = {}
     major_upper = major_string.upper()
     
     if "BUSINESS" in major_upper:
         emphasis_name = _extract_business_emphasis_name(soup, sections.keys())
+
+        parsed_from_text = _parse_business_requirements_from_text(soup, emphasis_name or "")
+        if parsed_from_text:
+            sections = parsed_from_text
 
         if not any(any(k in sec.upper() for k in ["ADMISSION", "UPPER-LEVEL", "UPPER LEVEL"]) for sec in sections):
             upper_level_courses = _parse_business_upper_level_from_text(soup)
@@ -1018,24 +1113,41 @@ def _scrape(html, major_string, url="", summarize_emphasis=False):
         
         emphasis_credits = 0
         
-        for sec, courses in sections.items():
+        for sec, entry in sections.items():
+            is_pool = isinstance(entry, dict) and entry.get("type") == "pool"
+            courses = entry.get("items", []) if is_pool else entry
             s_up = sec.upper()
             if any(x in s_up for x in ["ONLINE", "SUMMARY", "GRADUATE", "MASTER", "MINOR"]): continue
                 
             if any(k in s_up for k in ["ADMISSION", "UPPER-LEVEL", "UPPER LEVEL"]):
-                processed.setdefault("Upper-Level Admission Requirements", []).extend(c for c in courses if c not in processed.get("Upper-Level Admission Requirements", []))
+                if is_pool and not summarize_emphasis:
+                    processed["Upper-Level Admission Requirements"] = entry
+                else:
+                    processed.setdefault("Upper-Level Admission Requirements", []).extend(c for c in courses if c not in processed.get("Upper-Level Admission Requirements", []))
                             
             elif any(k in s_up for k in ["REQUIRED CORE", "BUSINESS CORE", "REQUIRED BUSINESS", "CORE REQUIREMENTS"]):
-                processed.setdefault("Business Core Requirements", []).extend(c for c in courses if c not in processed.get("Business Core Requirements", []))
+                if is_pool and not summarize_emphasis:
+                    processed["Business Core Requirements"] = entry
+                else:
+                    processed.setdefault("Business Core Requirements", []).extend(c for c in courses if c not in processed.get("Business Core Requirements", []))
                             
             elif _is_business_emphasis_section(sec, emphasis_name):
                 if summarize_emphasis:
-                    emphasis_credits += _sum_required_credits(courses)
+                    if is_pool and entry.get("required_count"):
+                        emphasis_credits += float(entry.get("required_count", 0)) * 3
+                    else:
+                        emphasis_credits += _sum_required_credits(courses)
                 else:
                     new_sec_name = f"{emphasis_name} Emphasis: {sec}" if emphasis_name else sec
-                    processed.setdefault(new_sec_name, []).extend(c for c in courses if c not in processed.get(new_sec_name, []))
+                    if is_pool:
+                        processed[new_sec_name] = entry
+                    else:
+                        processed.setdefault(new_sec_name, []).extend(c for c in courses if c not in processed.get(new_sec_name, []))
             elif not summarize_emphasis:
-                processed.setdefault(sec, []).extend(c for c in courses if c not in processed.get(sec, []))
+                if is_pool:
+                    processed[sec] = entry
+                else:
+                    processed.setdefault(sec, []).extend(c for c in courses if c not in processed.get(sec, []))
                 
         # Generate summary row if flag is true
         if summarize_emphasis and emphasis_name:
@@ -1086,6 +1198,42 @@ def gap_analysis(courses, requirements):
     results = []
     
     for section, items in requirements.items():
+        if isinstance(items, dict) and items.get("type") == "pool":
+            required_count = int(items.get("required_count", 0))
+            option_values = items.get("options", [])
+            completed = 0
+            in_progress = 0
+
+            for option_group in option_values:
+                option_codes = [norm(c.strip()) for c in option_group.split(" OR ") if c.strip()]
+                if any(code in done for code in option_codes):
+                    completed += 1
+                elif any(code in prog for code in option_codes):
+                    in_progress += 1
+
+            if completed >= required_count:
+                pool_status = "✅ Complete"
+            elif (completed + in_progress) >= required_count:
+                pool_status = "⏳ In Progress"
+            else:
+                pool_status = "❌ Outstanding"
+
+            results.append(
+                {
+                    "section": section,
+                    "type": "pool",
+                    "requirement_name": items.get("requirement_name", section),
+                    "required_count": required_count,
+                    "options": option_values,
+                    "code": "POOL",
+                    "title": f"Select {required_count} of the following",
+                    "status": pool_status,
+                    "grade": "—",
+                    "completed_count": completed,
+                }
+            )
+            continue
+
         sec_upper = section.upper()
         is_pick_list = any(k in sec_upper for k in ["FOCUS", "EXPERIENTIAL", "ELECTIVE", "CHOOSE", "SELECT", "EMPHASIS", "OPTIONS"])
         
@@ -1111,10 +1259,10 @@ def gap_analysis(courses, requirements):
             
             if completed_course:
                 c_code, c_title, c_status, c_grade = completed_course
-                results.append({"section": section, "code": c_code.replace("OR ", ""), "title": c_title, "status": c_status, "grade": c_grade})
+                results.append({"section": section, "type": "course", "code": c_code.replace("OR ", ""), "title": c_title, "status": c_status, "grade": c_grade})
             elif inprogress_course:
                 i_code, i_title, i_status, i_grade = inprogress_course
-                results.append({"section": section, "code": i_code.replace("OR ", ""), "title": i_title, "status": i_status, "grade": i_grade})
+                results.append({"section": section, "type": "course", "code": i_code.replace("OR ", ""), "title": i_title, "status": i_status, "grade": i_grade})
             else:
                 first_code, first_title = group[0]
                 status_text = "⚪ Option" if is_pick_list else "❌ Outstanding"
@@ -1123,7 +1271,7 @@ def gap_analysis(courses, requirements):
                 if first_code.replace("OR ", "") == "EMPHASIS":
                     status_text = "ℹ️ Summary"
                     
-                results.append({"section": section, "code": first_code.replace("OR ", ""), "title": first_title, "status": status_text, "grade": "—"})
+                results.append({"section": section, "type": "course", "code": first_code.replace("OR ", ""), "title": first_title, "status": status_text, "grade": "—"})
 
     return results
 
@@ -1198,10 +1346,30 @@ def render_degree_audit(major, results, emphases):
                 st.dataframe(_style_status_table(option_rows), use_container_width=True)
 
     for section, rows in detailed_sections.items():
-        section_df = pd.DataFrame(rows)[["code", "title", "status", "grade"]]
+        pool_rows = [row for row in rows if row.get("type") == "pool"]
+        course_rows = [row for row in rows if row.get("type") != "pool"]
         open_by_default = any("❌" in row["status"] or "⏳" in row["status"] for row in rows)
+
         with st.expander(section, expanded=open_by_default):
-            st.dataframe(_style_status_table(section_df), use_container_width=True)
+            if course_rows:
+                section_df = pd.DataFrame(course_rows)[["code", "title", "status", "grade"]]
+                st.dataframe(_style_status_table(section_df), use_container_width=True)
+
+            for pool in pool_rows:
+                req_name = pool.get("requirement_name", section)
+                required_count = int(pool.get("required_count", 0))
+                completed_count = int(pool.get("completed_count", 0))
+                st.markdown(f"**{req_name}**")
+                st.write(f"Select {required_count} of the following:")
+                st.caption(f"Progress: {completed_count}/{required_count} complete")
+
+                options = pool.get("options", [])
+                with st.expander("View Course Options", expanded=False):
+                    if not options:
+                        st.caption("No option list available for this pool.")
+                    else:
+                        for opt in options:
+                            st.markdown(f"- `{opt}`")
 
 # ─────────────────────────────────────────────────────────────────
 # AI TOOLS (LIVE SCRAPING & EXPORT)
