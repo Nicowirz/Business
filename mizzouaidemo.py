@@ -461,23 +461,34 @@ def get_emphasis_course_options(emphasis_name):
             section_kind = _classify_business_emphasis_section(section_name, page_emphasis_name)
             if section_kind not in {"required", "additional", "support"}:
                 continue
+
+            # Group OR alternatives together so each requirement appears as one choice row.
+            grouped = []
             for code, title, credits in courses:
-                if code.startswith("OR "):
-                    # Treat OR alternatives as the same requirement group; don't display both options.
+                if code.startswith("OR ") and grouped:
+                    grouped[-1].append((code, title, credits))
+                else:
+                    grouped.append([(code, title, credits)])
+
+            for group in grouped:
+                cleaned_codes = [code.replace("OR ", "").strip() for code, _, _ in group if code.replace("OR ", "").strip()]
+                if not cleaned_codes:
                     continue
-                clean_code = code.replace("OR ", "").strip()
-                if not clean_code:
-                    continue
-                dedupe_key = (section_name, clean_code)
+
+                display_code = " OR ".join(cleaned_codes)
+                display_title = next((title for _, title, _ in group if title), "")
+                base_credits = next((credits for code, _, credits in group if not code.startswith("OR ")), group[0][2])
+
+                dedupe_key = (section_name, display_code)
                 if dedupe_key in seen:
                     continue
                 seen.add(dedupe_key)
                 options.append(
                     {
                         "section": section_name,
-                        "code": clean_code,
-                        "title": title,
-                        "credits": credits,
+                        "code": display_code,
+                        "title": display_title,
+                        "credits": base_credits,
                         "section_type": section_kind,
                     }
                 )
