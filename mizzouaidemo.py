@@ -43,7 +43,7 @@ st.set_page_config(
 MIZZOU_GOLD = "#F1B82D"
 MIZZOU_BLACK = "#000000"
 MIZZOU_GREY = "#E1E1E1"
-EMPHASIS_OPTIONS_CACHE_VERSION = "v3"
+EMPHASIS_OPTIONS_CACHE_VERSION = "v4"
 
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
@@ -384,9 +384,12 @@ def _classify_business_emphasis_section(section_name, emphasis_name):
     if not emphasis_upper:
         return ""
 
-    match = re.match(r"^(Required|Additional)\s+(.+?)\s+Courses$", section_clean, re.IGNORECASE)
-    if not match:
-        match = re.match(r"^(Required|Additional)\s+(.+?)\s+Emphasis\s+Courses$", section_clean, re.IGNORECASE)
+    # Accept section headers with trailing metadata (e.g., credit totals or selection text).
+    match = re.match(
+        r"^(Required|Additional)\s+(.+?)\s+(?:Emphasis\s+)?Courses\b(?:.*)?$",
+        section_clean,
+        re.IGNORECASE,
+    )
     if not match:
         return ""
 
