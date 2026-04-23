@@ -370,25 +370,36 @@ def _extract_business_emphasis_name(soup, section_names=None):
         return ""
     return _extract_program_name(page_title)
 
-def _is_business_emphasis_section(section_name, emphasis_name):
+def _classify_business_emphasis_section(section_name, emphasis_name):
     section_upper = _normalize_text(section_name).upper()
     emphasis_upper = _normalize_text(emphasis_name).upper()
 
     if section_upper == "EMPHASIS SUPPORT COURSES":
-        return True
+        return "support"
 
     if not emphasis_upper:
-        return False
+        return ""
 
     match = re.match(r"^(Required|Additional)\s+(.+?)\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
     if not match:
         match = re.match(r"^(Required|Additional)\s+(.+?)\s+Emphasis\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
     if not match:
-        return False
+        return ""
 
     section_tokens = set(_name_tokens(match.group(2)))
     emphasis_tokens = set(_name_tokens(emphasis_name))
-    return bool(section_tokens and emphasis_tokens and section_tokens == emphasis_tokens)
+    if not (section_tokens and emphasis_tokens and section_tokens == emphasis_tokens):
+        return ""
+
+    section_kind = match.group(1).strip().lower()
+    if section_kind == "required":
+        return "required"
+    if section_kind == "additional":
+        return "additional"
+    return ""
+
+def _is_business_emphasis_section(section_name, emphasis_name):
+    return _classify_business_emphasis_section(section_name, emphasis_name) in {"required", "additional", "support"}
 
 def _build_emphasis_phrase_pattern(emphasis_name):
     tokens = _name_tokens(emphasis_name)
@@ -443,7 +454,8 @@ def get_emphasis_course_options(emphasis_name):
         section_name = section
         if " Emphasis: " in section_name:
             section_name = section_name.split(" Emphasis: ", 1)[1].strip()
-        if not _is_business_emphasis_section(section_name, page_emphasis_name):
+        section_kind = _classify_business_emphasis_section(section_name, page_emphasis_name)
+        if section_kind not in {"required", "additional", "support"}:
             continue
         for code, title, credits in courses:
             clean_code = code.replace("OR ", "").strip()
@@ -454,6 +466,7 @@ def get_emphasis_course_options(emphasis_name):
                         "code": clean_code,
                         "label": label,
                         "credits": credits,
+                        "section_type": section_kind,
                     }
                 )
     return options
