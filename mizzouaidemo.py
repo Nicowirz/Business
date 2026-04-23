@@ -43,7 +43,7 @@ st.set_page_config(
 MIZZOU_GOLD = "#F1B82D"
 MIZZOU_BLACK = "#000000"
 MIZZOU_GREY = "#E1E1E1"
-EMPHASIS_OPTIONS_CACHE_VERSION = "v2"
+EMPHASIS_OPTIONS_CACHE_VERSION = "v3"
 
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
@@ -569,6 +569,24 @@ def get_emphasis_course_options(program_label, emphasis_name, cache_version=EMPH
                     _collect(fallback_sections)
             except requests.RequestException:
                 pass
+
+    # Strong fallback for business transcripts: scan all live business emphasis pages and match by section tokens.
+    if not options:
+        program_upper = _normalize_text(program_label).upper()
+        if any(x in program_upper for x in ["BUS", "ACCOUNT", "ACCTCY"]):
+            for key, url in CATALOG_URLS.get("BUSINESS", {}).items():
+                if key == "CORE":
+                    continue
+                try:
+                    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                    if resp.status_code != 200:
+                        continue
+                    fallback_sections = _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False)
+                    _collect(fallback_sections)
+                    if options:
+                        break
+                except requests.RequestException:
+                    continue
 
     return options
 
