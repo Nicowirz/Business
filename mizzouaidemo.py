@@ -34,8 +34,8 @@ class TigerChat:
 # MIZZOU ADVANCED INTERFACE CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="TigerAdvisor | Mizzou",
-    page_icon="🐯",
+    page_title="Mizzou Academic Advisor",
+    page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -52,30 +52,34 @@ API_KEY = st.secrets["GROQ_API_KEY"]
 # ─────────────────────────────────────────────────────────────────
 # MIZZOU SIDEBAR & INTERFACE
 # ─────────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+    html, body, [class*="css"], [data-testid="stAppViewContainer"] {
+        font-family: 'IBM Plex Sans', sans-serif;
+    }
+    .block-container {
+        max-width: 1200px;
+        padding-top: 1.25rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 with st.sidebar:
-    try:
-        st.image("mu_logo.png", width=180)
-    except:
-        st.markdown(f"## **<span style='color:{MIZZOU_GOLD}'>Tiger</span>**Advisor", unsafe_allow_html=True)
-    
-    st.divider()
-    
-    st.markdown(f"### **1. 📋 Upload Unofficial Transcript**")
-    uploaded_file = st.file_uploader("Must be PDF format", type="pdf", help="Upload your PDF transcript from myZou.")
-    
-    st.divider()
-    
-    st.markdown(f"#### **About TigerAdvisor**")
+    st.markdown("### Mizzou Academic Advisor")
     st.info("""This AI-powered advisor helps you navigate your Mizzou degree plan by 
     parsing your unofficial transcript and dynamically scraping live catalog requirements.""")
     st.warning("⚠️ **Disclaimer:** This tool is for informational purposes. Always consult an official human academic advisor before enrolling.")
     
-    if st.button("🔄 Reset Current Session"):
+    if st.button("Reset Session"):
         st.session_state.clear()
         st.rerun()
 
 st.markdown(f"""
-<h1 style='color:{MIZZOU_BLACK};'>🐯 University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span></h1>
+<h1 style='color:{MIZZOU_BLACK};'>University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span></h1>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
@@ -1137,7 +1141,7 @@ def _build_compact_gap_context(gap_analysis_results, max_items_per_major=30):
 # ─────────────────────────────────────────────────────────────────
 # STREAMLIT WEB INTERFACE & AI CHAT
 # ─────────────────────────────────────────────────────────────────
-def init_chat_session(transcript_data, gap_analysis_results):
+def init_chat_session(transcript_data, eligible_courses):
     advisor_persona = """
     You are an expert academic advisor for the University of Missouri (Mizzou). 
     Your goal is to help students navigate their degree path based strictly on the gap analysis provided.
@@ -1150,9 +1154,9 @@ def init_chat_session(transcript_data, gap_analysis_results):
     5. Never mention internal function or tool names in your responses.
     6. Never recommend a course for a future semester if it is already marked In Progress in the student's record.
     7. Do not recommend a course and one of its prerequisites in the same semester plan.
+    SCHEDULING RULES: 1. A semester schedule MUST contain between 12 and 18 credit hours. NEVER exceed 18 hours. 2. You may only recommend a course if the student has completed the required prerequisites. 3. Output the recommended schedule as a simple bulleted list with the course code and credit hours.
     """
 
-    compact_gap = _build_compact_gap_context(gap_analysis_results)
     program_labels = [f"{p['type'].title()}: {p['name']}" for p in transcript_data.get("programs", [])]
     student_context = f"""
     Here is the student's academic profile:
@@ -1162,8 +1166,8 @@ def init_chat_session(transcript_data, gap_analysis_results):
     Emphases: {', '.join(transcript_data['emphases']) if transcript_data['emphases'] else 'None'}
     GPA: {transcript_data['gpa']}
     
-    Here is their compact Degree Gap Analysis (JSON):
-    {json.dumps(compact_gap, indent=2)}
+    Eligible Courses Next Semester:
+    {json.dumps(eligible_courses, indent=2)}
 
     Interpret any course listed under `in_progress_codes_all` as unavailable for future-semester recommendations.
     Also avoid placing a course in the same semester as any of its prerequisites.
@@ -1180,50 +1184,80 @@ def init_chat_session(transcript_data, gap_analysis_results):
         error_msg = f"⚠️ **API Error:** Details: {e}"
         return client, chat, error_msg
 
+def get_eligible_courses(gap_analysis, transcript_courses):
+    # TODO: Apply a Directed Acyclic Graph (DAG) prerequisite filter here to remove missing courses whose prerequisites are not yet met.
+    return gap_analysis
+
+def _upload_signature(uploaded_file):
+    if uploaded_file is None:
+        return None
+    return f"{uploaded_file.name}:{getattr(uploaded_file, 'size', 0)}"
+
 def main():
-    if uploaded_file is not None:
-        chat_tab, data_tab = st.tabs([f"🐯 Advisor Chat", "📋 My Degree Audit"])
+    chat_tab, data_tab = st.tabs(["Advisor Chat", "Degree Audit"])
 
-        is_initialized = all(
-            key in st.session_state
-            for key in ["analyzed", "transcript", "gap_analysis", "chat", "chat_client", "messages"]
-        )
-        if not is_initialized:
-            with st.spinner("Tiger Advisor is parsing your transcript and analyzing Mizzou catalog requirements..."):
-                t = parse_transcript(uploaded_file)
-                st.session_state.transcript = t
-                
-                all_results = {}
-                programs = t.get("programs", [])
-                if not programs and t["majors"]:
-                    programs = [{"type": "major", "name": m} for m in t["majors"]]
+    with chat_tab:
+        header_left, header_right = st.columns([0.78, 0.22])
+        with header_left:
+            st.markdown("#### Advisor Chat")
+        with header_right:
+            uploaded_file = st.file_uploader(
+                "Upload Transcript PDF",
+                type="pdf",
+                key="chat_upload",
+                label_visibility="collapsed",
+                help="Upload your unofficial Mizzou transcript.",
+            )
 
-                for program in programs:
-                    reqs = get_requirements(
-                        program["name"],
-                        emphases=t["emphases"],
-                        program_type=program.get("type", "major"),
-                    )
-                    if reqs:
-                        label = f"{program.get('type', 'program').title()}: {program['name']}"
-                        all_results[label] = gap_analysis(t["courses"], reqs)
-                
-                chat_client, chat_session, first_msg = init_chat_session(t, all_results)
+    current_sig = _upload_signature(uploaded_file)
+    previous_sig = st.session_state.get("active_upload_sig")
+    if current_sig != previous_sig:
+        for key in ["analyzed", "transcript", "gap_analysis", "chat", "chat_client", "messages", "pending_user_input"]:
+            st.session_state.pop(key, None)
+        st.session_state.active_upload_sig = current_sig
 
-                st.session_state.gap_analysis = all_results
-                st.session_state.analyzed = True
-                st.session_state.chat_client = chat_client
-                st.session_state.chat = chat_session
-                st.session_state.messages = [{"role": "assistant", "content": first_msg}]
+    has_upload = uploaded_file is not None
+    is_initialized = all(
+        key in st.session_state
+        for key in ["analyzed", "transcript", "gap_analysis", "chat", "chat_client", "messages"]
+    )
+    if has_upload and not is_initialized:
+        with st.spinner("Parsing transcript and analyzing catalog requirements..."):
+            t = parse_transcript(uploaded_file)
+            st.session_state.transcript = t
 
-        t = st.session_state.transcript
-        
-        # ─────────────────────────────────────────────────────────────────────
-        # TAB 2: DEGREE AUDIT
-        # ─────────────────────────────────────────────────────────────────────
-        with data_tab:
+            all_results = {}
+            programs = t.get("programs", [])
+            if not programs and t["majors"]:
+                programs = [{"type": "major", "name": m} for m in t["majors"]]
+
+            for program in programs:
+                reqs = get_requirements(
+                    program["name"],
+                    emphases=t["emphases"],
+                    program_type=program.get("type", "major"),
+                )
+                if reqs:
+                    label = f"{program.get('type', 'program').title()}: {program['name']}"
+                    all_results[label] = gap_analysis(t["courses"], reqs)
+
+            gap = all_results
+            eligible_courses = get_eligible_courses(gap, t["courses"])
+            chat_client, chat_session, first_msg = init_chat_session(t, eligible_courses)
+
+            st.session_state.gap_analysis = all_results
+            st.session_state.analyzed = True
+            st.session_state.chat_client = chat_client
+            st.session_state.chat = chat_session
+            st.session_state.messages = [{"role": "assistant", "content": first_msg}]
+
+    with data_tab:
+        if not has_upload or "transcript" not in st.session_state:
+            st.info("Upload a transcript from the chat panel to generate a degree audit.")
+        else:
+            t = st.session_state.transcript
             st.markdown(f"### **Mizzou Academic Profile: {t['name']}**")
-            
+
             col1, col2, col3 = st.columns(3)
             col1.metric("Current CUM GPA", f"{t['gpa']}", help="From myZou")
             col2.metric("Credits Earned", f"{int(t['hours'])}", "Fall 2024 CUM")
@@ -1236,50 +1270,47 @@ def main():
             else:
                 st.warning("No academic program detected on transcript. AI will generalize.")
 
-        # ─────────────────────────────────────────────────────────────────────
-        # TAB 1: AI CHAT
-        # ─────────────────────────────────────────────────────────────────────
-        with chat_tab:
-            st.markdown(f"#### **Tiger<span style='color:{MIZZOU_GOLD};'>Advisor** Chat</span>", unsafe_allow_html=True)
-            
-            if "messages" in st.session_state:
-                pending_user_input = st.session_state.pop("pending_user_input", None)
-                if pending_user_input:
-                    with st.spinner("Thinking (Consulting myZou)..."):
-                        try:
-                            time.sleep(1)
-                            response = st.session_state.chat.send_message(pending_user_input)
-                            st.session_state.messages.append({"role": "assistant", "content": response.text})
-                        except Exception as e:
-                            if "429" in str(e):
-                                st.session_state.messages.append({
-                                    "role": "assistant",
-                                    "content": "🐯 Slow down, Tiger! We've hit the Gemini rate limit. Wait a moment and try again.",
-                                })
-                            else:
-                                st.session_state.messages.append({
-                                    "role": "assistant",
-                                    "content": f"Error communicating with Gemini: {e}",
-                                })
+    with chat_tab:
+        if not has_upload or "messages" not in st.session_state:
+            st.info("Upload your transcript using the top-right control to start the advisor chat.")
+            st.chat_input("Ask a question about scheduling...", disabled=True)
+            return
 
-                with st.expander("📋 View Summary of Your Transcript Profile (Optional)"):
-                    st.write(f"**Parsed Name:** {t['name']}")
-                    st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
-                    st.write(f"**Parsed Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
-                    st.write(f"**Parsed Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
-                    st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
+        t = st.session_state.transcript
+        pending_user_input = st.session_state.pop("pending_user_input", None)
+        if pending_user_input:
+            with st.spinner("Thinking..."):
+                try:
+                    time.sleep(1)
+                    response = st.session_state.chat.send_message(pending_user_input)
+                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+                except Exception as e:
+                    if "429" in str(e):
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": "Rate limit reached. Please wait a moment and try again.",
+                        })
+                    else:
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"Error communicating with the AI service: {e}",
+                        })
 
-                for msg in st.session_state.messages:
-                    with st.chat_message(msg["role"], avatar="🐯" if msg["role"] == "assistant" else "👤"):
-                        st.markdown(msg["content"])
+        with st.expander("View Transcript Summary (Optional)"):
+            st.write(f"**Parsed Name:** {t['name']}")
+            st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
+            st.write(f"**Parsed Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
+            st.write(f"**Parsed Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
+            st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
 
-                if user_input := st.chat_input("Ask a question about your prerequisites or balance..."):
-                    st.session_state.messages.append({"role": "user", "content": user_input})
-                    st.session_state.pending_user_input = user_input
-                    st.rerun()
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-    else:
-        st.info("👈 Please upload your unofficial transcript (PDF) in the sidebar to begin.")
+        if user_input := st.chat_input("Ask a question about your prerequisites or balance..."):
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.pending_user_input = user_input
+            st.rerun()
 
 if __name__ == "__main__":
     main()
