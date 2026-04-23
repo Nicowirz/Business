@@ -371,7 +371,10 @@ def _extract_business_emphasis_name(soup, section_names=None):
     return _extract_program_name(page_title)
 
 def _classify_business_emphasis_section(section_name, emphasis_name):
-    section_upper = _normalize_text(section_name).upper()
+    section_clean = _normalize_text(section_name)
+    if ": " in section_clean:
+        section_clean = section_clean.split(": ", 1)[1].strip()
+    section_upper = section_clean.upper()
     emphasis_upper = _normalize_text(emphasis_name).upper()
 
     if section_upper == "EMPHASIS SUPPORT COURSES":
@@ -380,9 +383,9 @@ def _classify_business_emphasis_section(section_name, emphasis_name):
     if not emphasis_upper:
         return ""
 
-    match = re.match(r"^(Required|Additional)\s+(.+?)\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
+    match = re.match(r"^(Required|Additional)\s+(.+?)\s+Courses$", section_clean, re.IGNORECASE)
     if not match:
-        match = re.match(r"^(Required|Additional)\s+(.+?)\s+Emphasis\s+Courses$", _normalize_text(section_name), re.IGNORECASE)
+        match = re.match(r"^(Required|Additional)\s+(.+?)\s+Emphasis\s+Courses$", section_clean, re.IGNORECASE)
     if not match:
         return ""
 
@@ -433,21 +436,76 @@ def _best_business_emphasis_url(target_emphasis):
             continue
     return best_url
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def get_emphasis_course_options(emphasis_name):
-    url = _best_business_emphasis_url(emphasis_name)
-    if not url:
-        return []
+def _parse_program_label(program_label):
+    if ": " not in program_label:
+        return "major", program_label
+    lhs, rhs = program_label.split(": ", 1)
+    ptype = lhs.strip().lower()
+    if ptype not in {"major", "minor", "certificate", "emphasis"}:
+        ptype = "major"
+    return ptype, rhs.strip()
 
+def _normalize_focus_name(name):
+    return _normalize_text(name).replace("Advanced/Experimental Focus - ", "").strip()
+
+def _fetch_detailed_sections_for_emphasis(program_label, emphasis_name):
+    program_type, program_name = _parse_program_label(program_label)
+    upper_name = program_name.upper()
+
+    # Business: use emphasis-specific page for most-complete requirement sections.
+    if "BUSINESS" in upper_name or "ACCOUNTANCY" in upper_name:
+        url = _best_business_emphasis_url(emphasis_name)
+        if url:
+            try:
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    page_emphasis_name = _extract_business_emphasis_name(soup) or emphasis_name
+                    parsed_sections = _parse_business_requirements_from_text(soup, page_emphasis_name)
+                    if parsed_sections:
+                        return parsed_sections, page_emphasis_name
+                    return _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False), page_emphasis_name
+            except requests.RequestException:
+                pass
+
+    # Generic path for Data Science and any other programs.
+    dynamic = _discover_dynamic_catalog_urls(program_name, program_type=program_type)
+    core_url = dynamic.get("CORE")
+    if not core_url:
+        return {}, emphasis_name
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get(core_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         if resp.status_code != 200:
-            return []
-        soup = BeautifulSoup(resp.text, "html.parser")
-        page_emphasis_name = _extract_business_emphasis_name(soup) or emphasis_name
-        parsed_sections = _parse_business_requirements_from_text(soup, page_emphasis_name)
-        scraped = _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False)
+            return {}, emphasis_name
+        return _scrape(resp.text, program_name.upper(), core_url, summarize_emphasis=False), emphasis_name
     except requests.RequestException:
+        return {}, emphasis_name
+
+def _classify_emphasis_section(section_name, emphasis_name):
+    business_kind = _classify_business_emphasis_section(section_name, emphasis_name)
+    if business_kind == "required" or business_kind == "support":
+        return "required"
+    if business_kind == "additional":
+        return "optional"
+
+    section = _normalize_text(section_name)
+    if ": " in section:
+        section = section.split(": ", 1)[1].strip()
+    section_upper = section.upper()
+    emphasis_tokens = set(_name_tokens(_normalize_focus_name(emphasis_name)))
+    section_tokens = set(_name_tokens(_normalize_focus_name(section)))
+    overlap = len(emphasis_tokens & section_tokens)
+
+    if "ADVANCED/EXPERIMENTAL FOCUS" in section_upper and overlap > 0:
+        return "optional"
+    if any(k in section_upper for k in ["FOCUS", "ELECTIVE", "OPTION", "EMPHASIS"]) and overlap > 0:
+        return "optional"
+    return ""
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_emphasis_course_options(program_label, emphasis_name):
+    section_map, normalized_emphasis = _fetch_detailed_sections_for_emphasis(program_label, emphasis_name)
+    if not section_map:
         return []
 
     options = []
@@ -455,11 +513,9 @@ def get_emphasis_course_options(emphasis_name):
 
     def _collect(section_map):
         for section, courses in section_map.items():
-            section_name = section
-            if " Emphasis: " in section_name:
-                section_name = section_name.split(" Emphasis: ", 1)[1].strip()
-            section_kind = _classify_business_emphasis_section(section_name, page_emphasis_name)
-            if section_kind not in {"required", "additional", "support"}:
+            section_name = _normalize_text(section)
+            section_kind = _classify_emphasis_section(section_name, normalized_emphasis)
+            if section_kind not in {"required", "optional"}:
                 continue
 
             # Group OR alternatives together so each requirement appears as one choice row.
@@ -492,11 +548,7 @@ def get_emphasis_course_options(emphasis_name):
                         "section_type": section_kind,
                     }
                 )
-
-    # Text-block parser is usually most complete; fallback to table scrape if needed.
-    _collect(parsed_sections)
-    if not options:
-        _collect(scraped)
+    _collect(section_map)
     return options
 
 def _business_section_label(section_name, program_name=""):
@@ -1085,7 +1137,7 @@ def render_degree_audit(major, results, emphases):
         for idx, row in enumerate(emphasis_summaries):
             emphasis_area = row["section"].replace(" Emphasis Options", "").replace("Advanced/Experimental Focus - ", "").strip()
             with st.expander(f"Course Options: {emphasis_area}", expanded=False):
-                options = get_emphasis_course_options(emphasis_area)
+                options = get_emphasis_course_options(major, emphasis_area)
                 if not options:
                     st.caption("No option list could be loaded for this emphasis from the live catalog.")
                     continue
@@ -1095,7 +1147,7 @@ def render_degree_audit(major, results, emphases):
                         {
                             "code": opt["code"],
                             "title": opt["title"] if opt["title"] else "",
-                            "status": "ℹ️ Required" if opt.get("section_type") in {"required", "support"} else "⚪ Optional",
+                            "status": "ℹ️ Required" if opt.get("section_type") == "required" else "⚪ Optional",
                             "grade": "—",
                         }
                         for opt in options
