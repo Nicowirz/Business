@@ -445,30 +445,44 @@ def get_emphasis_course_options(emphasis_name):
             return []
         soup = BeautifulSoup(resp.text, "html.parser")
         page_emphasis_name = _extract_business_emphasis_name(soup) or emphasis_name
+        parsed_sections = _parse_business_requirements_from_text(soup, page_emphasis_name)
         scraped = _scrape(resp.text, "BUSINESS", url, summarize_emphasis=False)
     except requests.RequestException:
         return []
 
     options = []
-    for section, courses in scraped.items():
-        section_name = section
-        if " Emphasis: " in section_name:
-            section_name = section_name.split(" Emphasis: ", 1)[1].strip()
-        section_kind = _classify_business_emphasis_section(section_name, page_emphasis_name)
-        if section_kind not in {"required", "additional", "support"}:
-            continue
-        for code, title, credits in courses:
-            clean_code = code.replace("OR ", "").strip()
-            label = f"{clean_code} - {title}" if title else clean_code
-            if clean_code and not any(o["code"] == clean_code for o in options):
+    seen = set()
+
+    def _collect(section_map):
+        for section, courses in section_map.items():
+            section_name = section
+            if " Emphasis: " in section_name:
+                section_name = section_name.split(" Emphasis: ", 1)[1].strip()
+            section_kind = _classify_business_emphasis_section(section_name, page_emphasis_name)
+            if section_kind not in {"required", "additional", "support"}:
+                continue
+            for code, title, credits in courses:
+                clean_code = code.replace("OR ", "").strip()
+                if not clean_code:
+                    continue
+                dedupe_key = (section_name, clean_code)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
                 options.append(
                     {
+                        "section": section_name,
                         "code": clean_code,
-                        "label": label,
+                        "title": title,
                         "credits": credits,
                         "section_type": section_kind,
                     }
                 )
+
+    # Text-block parser is usually most complete; fallback to table scrape if needed.
+    _collect(parsed_sections)
+    if not options:
+        _collect(scraped)
     return options
 
 def _business_section_label(section_name, program_name=""):
@@ -1090,13 +1104,18 @@ def render_degree_audit(major, results, emphases):
                     st.caption("No option list could be loaded for this emphasis from the live catalog.")
                     continue
 
-                select_values = [f"{opt['label']} ({opt['credits']} cr)" for opt in options]
-                st.selectbox(
-                    "Choose a course option to review",
-                    options=select_values,
-                    index=0,
-                    key=f"emphasis_option_{major}_{idx}",
+                option_rows = pd.DataFrame(
+                    [
+                        {
+                            "code": opt["code"],
+                            "title": opt["title"] if opt["title"] else "",
+                            "status": "⚪ Option",
+                            "grade": "—",
+                        }
+                        for opt in options
+                    ]
                 )
+                st.dataframe(_style_status_table(option_rows), use_container_width=True)
 
     for section, rows in detailed_sections.items():
         section_df = pd.DataFrame(rows)[["code", "title", "status", "grade"]]
@@ -1239,7 +1258,6 @@ def init_chat_session(transcript_data, eligible_courses):
     
     CRITICAL RULES:
     1. Prerequisite Checking: Before recommending a course, verify prerequisites using live course catalog lookup.
-    2. Semester Balancing: A standard semester is 12-15 credits. Do not recommend more than 2 high-level technical classes (engineering/finance/acct) in a single semester.
     3. Use Mizzou-themed language when appropriate (e.g., refer to 'myZou' or use 'Tiger' metaphors).
     4. Exporting: When the student agrees on a final list of classes for next semester, export a CSV schedule for them.
     5. Never mention internal function or tool names in your responses.
