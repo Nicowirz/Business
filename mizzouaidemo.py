@@ -391,7 +391,8 @@ def _classify_business_emphasis_section(section_name, emphasis_name):
 
     section_tokens = set(_name_tokens(match.group(2)))
     emphasis_tokens = set(_name_tokens(emphasis_name))
-    if not (section_tokens and emphasis_tokens and section_tokens == emphasis_tokens):
+    overlap = len(section_tokens & emphasis_tokens)
+    if not (section_tokens and emphasis_tokens and overlap > 0):
         return ""
 
     section_kind = match.group(1).strip().lower()
