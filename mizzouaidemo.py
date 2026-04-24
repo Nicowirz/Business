@@ -536,15 +536,25 @@ def get_emphasis_course_options(program_label, emphasis_name, cache_version=EMPH
     seen = set()
 
     def _collect(section_map):
-        for section, courses in section_map.items():
+        for section, section_value in section_map.items():
             section_name = _normalize_text(section)
             section_kind = _classify_emphasis_section(section_name, normalized_emphasis)
             if section_kind not in {"required", "optional"}:
                 continue
 
+            if isinstance(section_value, dict):
+                courses = section_value.get("items", [])
+            else:
+                courses = section_value
+            if not isinstance(courses, list):
+                continue
+
             # Group OR alternatives together so each requirement appears as one choice row.
             grouped = []
-            for code, title, credits in courses:
+            for course in courses:
+                if not isinstance(course, (list, tuple)) or len(course) < 3:
+                    continue
+                code, title, credits = course[0], course[1], course[2]
                 if code.startswith("OR ") and grouped:
                     grouped[-1].append((code, title, credits))
                 else:
