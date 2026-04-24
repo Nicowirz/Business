@@ -43,6 +43,7 @@ MIZZOU_GOLD = "#F1B82D"
 MIZZOU_BLACK = "#000000"
 MIZZOU_GREY = "#E1E1E1"
 EMPHASIS_OPTIONS_CACHE_VERSION = "v4"
+LOGO_PATH = "mizzou_logo.png"
 
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
@@ -74,6 +75,10 @@ st.markdown(
 )
 
 with st.sidebar:
+    if hasattr(st, "logo"):
+        st.logo(LOGO_PATH)
+    else:
+        st.image(LOGO_PATH, use_container_width=True)
     st.title("Mizzou Advising Portal: ZouPath")
     st.divider()
     st.info("""This AI-powered advisor helps you navigate your Mizzou degree plan by 
@@ -85,22 +90,11 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-title_col, logo_col = st.columns([0.86, 0.14], vertical_alignment="center")
-with title_col:
-    st.markdown(
-        f"""
-        <h1 style='color:{MIZZOU_BLACK}; margin-bottom: 0.2rem;'>
-            University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span>
-        </h1>
-        """,
-        unsafe_allow_html=True,
-    )
+logo_col, title_col = st.columns([1, 5], vertical_alignment="center")
 with logo_col:
-    emblem_path = r"C:\Nico-Cloud\OneDrive - University of Missouri\Documents\University-of-Missouri-Emblem.png"
-    try:
-        st.image(emblem_path, width=86)
-    except Exception:
-        pass
+    st.image(LOGO_PATH, width=80)
+with title_col:
+    st.title("ZouPath Advisor Portal")
 
 # ─────────────────────────────────────────────────────────────────
 # TRANSCRIPT PARSING 
