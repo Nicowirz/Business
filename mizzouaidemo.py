@@ -85,6 +85,24 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _resolve_image_from_page(page_url):
+    try:
+        resp = requests.get(page_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for selector in [
+            ("meta", {"property": "og:image"}),
+            ("meta", {"name": "twitter:image"}),
+        ]:
+            tag = soup.find(selector[0], attrs=selector[1])
+            if tag and tag.get("content"):
+                return tag.get("content").strip()
+    except Exception:
+        return None
+    return None
+
 title_col, logo_col = st.columns([0.86, 0.14], vertical_alignment="center")
 with title_col:
     st.markdown(
@@ -96,9 +114,11 @@ with title_col:
         unsafe_allow_html=True,
     )
 with logo_col:
-    emblem_path = r"C:\Nico-Cloud\OneDrive - University of Missouri\Documents\University-of-Missouri-Emblem.png"
+    emblem_page_url = "https://1000logos.net/university-of-missouri-logo/"
+    emblem_path = _resolve_image_from_page(emblem_page_url)
     try:
-        st.image(emblem_path, width=86)
+        if emblem_path:
+            st.image(emblem_path, width=86)
     except Exception:
         pass
 
