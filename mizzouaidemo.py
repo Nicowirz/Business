@@ -45,60 +45,6 @@ MIZZOU_BLACK = "#000000"
 MIZZOU_GREY = "#E1E1E1"
 EMPHASIS_OPTIONS_CACHE_VERSION = "v4"
 
-# Mock state for immediate dashboard testing before live scraper wiring.
-if "uploaded_transcript" not in st.session_state:
-    st.session_state["uploaded_transcript"] = [
-        {"code": "MATH 1400", "title": "Calculus I", "status": "Complete", "grade": "A", "credits": 3},
-        {"code": "ECON 1014", "title": "Micro and Macro Economics", "status": "Complete", "grade": "B", "credits": 3},
-        {"code": "STAT 2500", "title": "Introduction to Probability and Statistics", "status": "Complete", "grade": "A-", "credits": 3},
-        {"code": "ACCTCY 2036", "title": "Accounting I", "status": "In Progress", "grade": "IP", "credits": 3},
-        {"code": "FINANC 3000", "title": "Corporate Finance", "status": "Complete", "grade": "B+", "credits": 3},
-    ]
-
-if "active_programs" not in st.session_state:
-    st.session_state["active_programs"] = [
-        {
-            "name": "Program Alpha",
-            "type": "Major",
-            "requirements": {
-                "Core Requirements": [
-                    ("MATH 1400", "Calculus I", 3.0),
-                    ("ECON 1014", "Micro and Macro Economics", 3.0),
-                    ("FINANC 3000", "Corporate Finance", 3.0),
-                ],
-                "Elective Pool": {
-                    "requirement_name": "Analytical Electives",
-                    "type": "pool",
-                    "required_count": 1,
-                    "options": ["STAT 2500 OR MATH 1707", "FINANC 3200 OR FINANC 3300"],
-                    "items": [
-                        ("STAT 2500", "Introduction to Probability and Statistics", 3.0),
-                        ("OR MATH 1707", "Linear Algebra", 3.0),
-                        ("FINANC 3200", "Investments", 3.0),
-                        ("OR FINANC 3300", "Financial Markets", 3.0),
-                    ],
-                },
-            },
-        },
-        {
-            "name": "Program Beta",
-            "type": "Minor",
-            "requirements": {
-                "Foundation": [
-                    ("MATH 1400", "Calculus I", 3.0),
-                    ("STAT 2500", "Introduction to Probability and Statistics", 3.0),
-                    ("ACCTCY 2036", "Accounting I", 3.0),
-                ]
-            },
-        },
-    ]
-
-if "advisor_ledger_notes" not in st.session_state:
-    st.session_state["advisor_ledger_notes"] = [
-        {"source": "Note from Major Advisor", "message": "Student is eligible for upper-level major planning next term.", "timestamp": "Initial"},
-        {"source": "Note from Minor Advisor", "message": "Recommend one methods elective to align with minor outcomes.", "timestamp": "Initial"},
-    ]
-
 # ─────────────────────────────────────────────────────────────────
 # AI ADVISOR CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
@@ -1554,210 +1500,6 @@ def _build_compact_gap_context(gap_analysis_results, max_items_per_major=30):
         }
     return compact
 
-def _to_course_record(item):
-    if isinstance(item, dict):
-        code = norm(item.get("code", ""))
-        return {
-            "code": code,
-            "status": item.get("status", ""),
-            "grade": item.get("grade", ""),
-            "credits": float(item.get("credits", 3) or 3),
-            "title": item.get("title", ""),
-        }
-    if isinstance(item, (list, tuple)) and item:
-        code = norm(str(item[0]))
-        credits = 3.0
-        if len(item) > 2:
-            try:
-                credits = float(item[2])
-            except Exception:
-                credits = 3.0
-        return {
-            "code": code,
-            "status": "Complete",
-            "grade": "",
-            "credits": credits,
-            "title": item[1] if len(item) > 1 else "",
-        }
-    return {"code": "", "status": "", "grade": "", "credits": 3.0, "title": ""}
-
-def _program_key(program):
-    return f"{program.get('type', 'Program')}: {program.get('name', 'Unnamed Program')}"
-
-def analyze_program_overlaps(transcript, active_programs):
-    course_map = {}
-    for item in transcript or []:
-        record = _to_course_record(item)
-        if not record["code"]:
-            continue
-        course_map[record["code"]] = record
-
-    completed_codes = {
-        code for code, rec in course_map.items()
-        if str(rec.get("status", "")).lower() in {"complete", "in progress", "completed"}
-    }
-
-    course_to_programs = {}
-    program_status = {}
-
-    for program in active_programs or []:
-        pkey = _program_key(program)
-        reqs = program.get("requirements", {}) or {}
-
-        total_units = 0
-        completed_units = 0
-        missing_bottlenecks = []
-        fulfilled_codes_for_program = set()
-
-        for _, section_value in reqs.items():
-            if isinstance(section_value, dict) and section_value.get("type") == "pool":
-                required_count = int(section_value.get("required_count", 0))
-                option_groups = section_value.get("options", [])
-                total_units += required_count
-
-                satisfied = 0
-                for option_group in option_groups:
-                    option_codes = [norm(c.strip()) for c in str(option_group).split(" OR ") if c.strip()]
-                    hit = next((c for c in option_codes if c in completed_codes), None)
-                    if hit:
-                        satisfied += 1
-                        fulfilled_codes_for_program.add(hit)
-
-                completed_units += min(satisfied, required_count)
-                if satisfied < required_count:
-                    missing_bottlenecks.append(
-                        f"{section_value.get('requirement_name', 'Pool')}: choose {required_count - satisfied} more option(s)"
-                    )
-                continue
-
-            if not isinstance(section_value, list):
-                continue
-
-            grouped = []
-            for item in section_value:
-                if not isinstance(item, (list, tuple)) or len(item) < 1:
-                    continue
-                code = str(item[0])
-                title = item[1] if len(item) > 1 else ""
-                if code.startswith("OR ") and grouped:
-                    grouped[-1].append((code, title))
-                else:
-                    grouped.append([(code, title)])
-
-            for group in grouped:
-                total_units += 1
-                group_codes = [norm(code.replace("OR ", "").strip()) for code, _ in group if code]
-                hit = next((c for c in group_codes if c in completed_codes), None)
-                if hit:
-                    completed_units += 1
-                    fulfilled_codes_for_program.add(hit)
-                else:
-                    missing_bottlenecks.append(" OR ".join(code for code, _ in group if code))
-
-        for code in fulfilled_codes_for_program:
-            course_to_programs.setdefault(code, set()).add(pkey)
-
-        completion_pct = round((completed_units / total_units) * 100, 1) if total_units else 0.0
-        program_status[pkey] = {
-            "completion_percentage": completion_pct,
-            "completed_units": completed_units,
-            "total_units": total_units,
-            "missing_bottlenecks": missing_bottlenecks[:8],
-        }
-
-    double_dips = []
-    for code, programs_hit in course_to_programs.items():
-        if len(programs_hit) > 1:
-            course_meta = course_map.get(code, {})
-            double_dips.append(
-                {
-                    "code": code,
-                    "title": course_meta.get("title", ""),
-                    "credits": float(course_meta.get("credits", 3) or 3),
-                    "programs": sorted(programs_hit),
-                }
-            )
-
-    double_dips.sort(key=lambda x: (-len(x["programs"]), x["code"]))
-    return double_dips, program_status
-
-def render_advisor_dashboard():
-    transcript = st.session_state.get("uploaded_transcript", [])
-    active_programs = st.session_state.get("active_programs", [])
-
-    st.markdown("### Cross-Departmental Advisor Dashboard")
-    if not active_programs:
-        st.info("No active programs found. Add program dictionaries to `st.session_state['active_programs']`.")
-        return
-
-    double_dips, program_status = analyze_program_overlaps(transcript, active_programs)
-    total_saved_credits = round(sum(item.get("credits", 0) for item in double_dips), 1)
-
-    analysis_tab, ledger_tab = st.tabs(["Cross-Program Analysis", "Unified Student Ledger"])
-
-    with analysis_tab:
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            st.metric("Total Credits Saved via Double-Dipping", f"{total_saved_credits}")
-        with col_b:
-            if double_dips:
-                st.success(f"{len(double_dips)} course(s) currently satisfy multiple programs.")
-            else:
-                st.info("No double-dipping overlaps detected yet.")
-
-        if double_dips:
-            overlaps_df = pd.DataFrame(
-                [
-                    {
-                        "course": item["code"],
-                        "title": item["title"],
-                        "program_count": len(item["programs"]),
-                        "programs": ", ".join(item["programs"]),
-                    }
-                    for item in double_dips
-                ]
-            )
-            st.dataframe(overlaps_df, use_container_width=True, hide_index=True)
-
-        for program in active_programs:
-            pkey = _program_key(program)
-            status = program_status.get(
-                pkey,
-                {"completion_percentage": 0.0, "completed_units": 0, "total_units": 0, "missing_bottlenecks": []},
-            )
-            with st.expander(f"{pkey} ({status['completion_percentage']}%)", expanded=False):
-                st.progress(min(max(status["completion_percentage"] / 100.0, 0.0), 1.0))
-                st.caption(f"Progress: {status['completed_units']} of {status['total_units']} requirement unit(s) complete")
-                if status["missing_bottlenecks"]:
-                    st.markdown("**Missing Bottleneck Requirements**")
-                    for item in status["missing_bottlenecks"]:
-                        st.markdown(f"- `{item}`")
-                else:
-                    st.success("No bottlenecks detected for this program.")
-
-    with ledger_tab:
-        st.caption("Shared timeline across advising units.")
-        notes = st.session_state.get("advisor_ledger_notes", [])
-        if not notes:
-            st.info("No interdepartmental notes yet.")
-        else:
-            for note in notes:
-                st.markdown(f"**{note.get('source', 'Advisor Note')}**")
-                st.write(note.get("message", ""))
-                st.caption(note.get("timestamp", ""))
-                st.divider()
-
-        new_note = st.chat_input("Add a new cross-department note...", key="advisor_ledger_input")
-        if new_note:
-            st.session_state["advisor_ledger_notes"].append(
-                {
-                    "source": "Note from Advisor Team",
-                    "message": new_note,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
-                }
-            )
-            st.rerun()
-
 # ─────────────────────────────────────────────────────────────────
 # STREAMLIT WEB INTERFACE & AI CHAT
 # ─────────────────────────────────────────────────────────────────
@@ -1844,10 +1586,8 @@ def main():
         with st.spinner("Parsing transcript and analyzing catalog requirements..."):
             t = parse_transcript(uploaded_file)
             st.session_state.transcript = t
-            st.session_state.uploaded_transcript = t.get("courses", [])
 
             all_results = {}
-            dashboard_programs = []
             programs = t.get("programs", [])
             if not programs and t["majors"]:
                 programs = [{"type": "major", "name": m} for m in t["majors"]]
@@ -1861,21 +1601,12 @@ def main():
                 if reqs:
                     label = f"{program.get('type', 'program').title()}: {program['name']}"
                     all_results[label] = gap_analysis(t["courses"], reqs)
-                    dashboard_programs.append(
-                        {
-                            "name": program["name"],
-                            "type": program.get("type", "program").title(),
-                            "requirements": reqs,
-                        }
-                    )
 
             gap = all_results
             eligible_courses = get_eligible_courses(gap, t["courses"])
             chat_client, chat_session, first_msg = init_chat_session(t, eligible_courses)
 
             st.session_state.gap_analysis = all_results
-            if dashboard_programs:
-                st.session_state.active_programs = dashboard_programs
             st.session_state.analyzed = True
             st.session_state.chat_client = chat_client
             st.session_state.chat = chat_session
@@ -1899,9 +1630,6 @@ def main():
                     render_degree_audit(major, results, t["emphases"])
             else:
                 st.warning("No academic program detected on transcript. AI will generalize.")
-
-            st.divider()
-            render_advisor_dashboard()
 
     with chat_tab:
         if not has_upload or "messages" not in st.session_state:
