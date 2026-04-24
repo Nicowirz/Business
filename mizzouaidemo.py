@@ -34,7 +34,7 @@ class TigerChat:
 # MIZZOU ADVANCED INTERFACE CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Mizzou Advising Portal",
+    page_title="Mizzou Advising Portal: ZouPath",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -85,9 +85,22 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-st.markdown(f"""
-<h1 style='color:{MIZZOU_BLACK};'>University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span></h1>
-""", unsafe_allow_html=True)
+title_col, logo_col = st.columns([0.86, 0.14], vertical_alignment="center")
+with title_col:
+    st.markdown(
+        f"""
+        <h1 style='color:{MIZZOU_BLACK}; margin-bottom: 0.2rem;'>
+            University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span>
+        </h1>
+        """,
+        unsafe_allow_html=True,
+    )
+with logo_col:
+    emblem_path = r"C:\Nico-Cloud\OneDrive - University of Missouri\Documents\University-of-Missouri-Emblem.png"
+    try:
+        st.image(emblem_path, width=86)
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────────────────────────
 # TRANSCRIPT PARSING 
