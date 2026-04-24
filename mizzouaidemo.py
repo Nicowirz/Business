@@ -34,10 +34,9 @@ class TigerChat:
 # MIZZOU ADVANCED INTERFACE CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Mizzou Academic Advisor",
-    page_icon="🎓",
+    page_title="Mizzou Advising Portal",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 MIZZOU_GOLD = "#F1B82D"
@@ -57,12 +56,14 @@ st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
     html, body, [class*="css"], [data-testid="stAppViewContainer"] {
         font-family: 'IBM Plex Sans', sans-serif;
     }
     .block-container {
         max-width: 1200px;
-        padding-top: 1.25rem;
+        padding-top: 0.5rem;
     }
     </style>
     """,
@@ -70,10 +71,12 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.markdown("### Mizzou Academic Advisor")
+    st.title("Mizzou Advising Portal")
+    st.divider()
     st.info("""This AI-powered advisor helps you navigate your Mizzou degree plan by 
     parsing your unofficial transcript and dynamically scraping live catalog requirements.""")
     st.warning("⚠️ **Disclaimer:** This tool is for informational purposes. Always consult an official human academic advisor before enrolling.")
+    st.divider()
     
     if st.button("Reset Session"):
         st.session_state.clear()
@@ -1557,18 +1560,14 @@ def _upload_signature(uploaded_file):
 def main():
     chat_tab, data_tab = st.tabs(["Advisor Chat", "Degree Audit"])
 
-    with chat_tab:
-        header_left, header_right = st.columns([0.78, 0.22])
-        with header_left:
-            st.markdown("#### Advisor Chat")
-        with header_right:
-            uploaded_file = st.file_uploader(
-                "Upload Transcript PDF",
-                type="pdf",
-                key="chat_upload",
-                label_visibility="collapsed",
-                help="Upload your unofficial Mizzou transcript.",
-            )
+    with st.sidebar:
+        st.subheader("Data Inputs")
+        uploaded_file = st.file_uploader(
+            "Upload Transcript PDF",
+            type="pdf",
+            key="chat_upload",
+            help="Upload your unofficial Mizzou transcript.",
+        )
 
     current_sig = _upload_signature(uploaded_file)
     previous_sig = st.session_state.get("active_upload_sig")
@@ -1614,26 +1613,37 @@ def main():
 
     with data_tab:
         if not has_upload or "transcript" not in st.session_state:
-            st.info("Upload a transcript from the chat panel to generate a degree audit.")
+            st.info("Upload a transcript from the sidebar to generate a degree audit.")
         else:
             t = st.session_state.transcript
-            st.markdown(f"### **Mizzou Academic Profile: {t['name']}**")
+            st.subheader(f"Mizzou Academic Profile: {t['name']}")
+
+            remaining_requirements = 0
+            for _, rows in (st.session_state.gap_analysis or {}).items():
+                remaining_requirements += len([r for r in rows if "❌" in r.get("status", "")])
 
             col1, col2, col3 = st.columns(3)
-            col1.metric("Current CUM GPA", f"{t['gpa']}", help="From myZou")
-            col2.metric("Credits Earned", f"{int(t['hours'])}", "Fall 2024 CUM")
-            col3.metric("Enrollment Status", "Active", help="Spring 2025 semester")
+            col1.metric("Total Credits Completed", f"{int(t['hours'])}")
+            col2.metric("Overall GPA", f"{t['gpa']}")
+            col3.metric("Remaining Requirements", f"{remaining_requirements}")
             st.divider()
 
             if st.session_state.gap_analysis:
                 for major, results in st.session_state.gap_analysis.items():
-                    render_degree_audit(major, results, t["emphases"])
+                    with st.container(border=True):
+                        render_degree_audit(major, results, t["emphases"])
+                        missing_count = len([r for r in results if "❌" in r.get("status", "")])
+                        if missing_count > 0:
+                            st.warning(f"{missing_count} outstanding requirement(s) need attention.")
+                        else:
+                            st.info("No outstanding requirements in this section.")
             else:
                 st.warning("No academic program detected on transcript. AI will generalize.")
 
     with chat_tab:
+        st.subheader("Advisor Chat")
         if not has_upload or "messages" not in st.session_state:
-            st.info("Upload your transcript using the top-right control to start the advisor chat.")
+            st.info("Upload your transcript from the sidebar to start the advisor chat.")
             st.chat_input("Ask a question about scheduling...", disabled=True)
             return
 
