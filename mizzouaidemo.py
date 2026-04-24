@@ -1699,11 +1699,11 @@ def main():
 
         if t:
             with st.expander("View Transcript Summary (Optional)"):
-                st.write(f"**Parsed Name:** {t['name']}")
-                st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
-                st.write(f"**Parsed Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
-                st.write(f"**Parsed Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
-                st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
+                st.write(f"** Name:** {t['name']}")
+                st.write(f"** Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
+                st.write(f"** Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
+                st.write(f"** Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
+                st.write(f"** Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
         else:
             st.info("No transcript attached. Advisor chat is in general guidance mode.")
 
