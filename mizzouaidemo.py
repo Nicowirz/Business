@@ -63,7 +63,10 @@ st.markdown(
     }
     .block-container {
         max-width: 1200px;
-        padding-top: 0.5rem;
+        padding-top: 1rem;
+    }
+    h1 {
+        margin-top: 0.25rem;
     }
     </style>
     """,
@@ -1548,6 +1551,23 @@ def init_chat_session(transcript_data, eligible_courses):
         error_msg = f"⚠️ **API Error:** Details: {e}"
         return client, chat, error_msg
 
+def init_chat_session_generic():
+    advisor_persona = """
+    You are an expert academic advisor for the University of Missouri (Mizzou).
+    Help the student plan coursework, understand prerequisites, and build balanced semester plans.
+    If transcript details are missing, ask concise follow-up questions before giving specific recommendations.
+    Never mention internal function or tool names.
+    """
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    chat = TigerChat(client, advisor_persona)
+    try:
+        initial_response = chat.send_message(
+            "Introduce yourself as a Mizzou advisor and ask the student what they want help with today."
+        )
+        return client, chat, initial_response.text
+    except Exception as e:
+        return client, chat, f"⚠️ **API Error:** Details: {e}"
+
 def get_eligible_courses(gap_analysis, transcript_courses):
     # TODO: Apply a Directed Acyclic Graph (DAG) prerequisite filter here to remove missing courses whose prerequisites are not yet met.
     return gap_analysis
@@ -1560,14 +1580,20 @@ def _upload_signature(uploaded_file):
 def main():
     chat_tab, data_tab = st.tabs(["Advisor Chat", "Degree Audit"])
 
-    with st.sidebar:
-        st.subheader("Data Inputs")
-        uploaded_file = st.file_uploader(
-            "Upload Transcript PDF",
-            type="pdf",
-            key="chat_upload",
-            help="Upload your unofficial Mizzou transcript.",
-        )
+    with chat_tab:
+        st.subheader("Advisor Chat")
+        upload_left, upload_right = st.columns([0.8, 0.2])
+        with upload_left:
+            st.caption("Chat immediately, or attach a transcript for personalized degree-audit guidance.")
+        with upload_right:
+            st.markdown("<div style='padding-top: 0.15rem;'></div>", unsafe_allow_html=True)
+            uploaded_file = st.file_uploader(
+                "Attach Transcript (Optional)",
+                type="pdf",
+                key="chat_upload",
+                label_visibility="collapsed",
+                help="Upload your unofficial Mizzou transcript to unlock transcript-specific analysis.",
+            )
 
     current_sig = _upload_signature(uploaded_file)
     previous_sig = st.session_state.get("active_upload_sig")
@@ -1610,10 +1636,15 @@ def main():
             st.session_state.chat_client = chat_client
             st.session_state.chat = chat_session
             st.session_state.messages = [{"role": "assistant", "content": first_msg}]
+    elif not has_upload and "chat" not in st.session_state:
+        chat_client, chat_session, first_msg = init_chat_session_generic()
+        st.session_state.chat_client = chat_client
+        st.session_state.chat = chat_session
+        st.session_state.messages = [{"role": "assistant", "content": first_msg}]
 
     with data_tab:
         if not has_upload or "transcript" not in st.session_state:
-            st.info("Upload a transcript from the sidebar to generate a degree audit.")
+            st.info("Attach a transcript in the chat tab to generate a degree audit.")
         else:
             t = st.session_state.transcript
             st.subheader(f"Mizzou Academic Profile: {t['name']}")
@@ -1641,13 +1672,12 @@ def main():
                 st.warning("No academic program detected on transcript. AI will generalize.")
 
     with chat_tab:
-        st.subheader("Advisor Chat")
-        if not has_upload or "messages" not in st.session_state:
-            st.info("Upload your transcript from the sidebar to start the advisor chat.")
+        if "messages" not in st.session_state:
+            st.error("Chat session could not be initialized. Please refresh and try again.")
             st.chat_input("Ask a question about scheduling...", disabled=True)
             return
 
-        t = st.session_state.transcript
+        t = st.session_state.get("transcript")
         pending_user_input = st.session_state.pop("pending_user_input", None)
         if pending_user_input:
             with st.spinner("Thinking..."):
@@ -1667,12 +1697,15 @@ def main():
                             "content": f"Error communicating with the AI service: {e}",
                         })
 
-        with st.expander("View Transcript Summary (Optional)"):
-            st.write(f"**Parsed Name:** {t['name']}")
-            st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
-            st.write(f"**Parsed Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
-            st.write(f"**Parsed Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
-            st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
+        if t:
+            with st.expander("View Transcript Summary (Optional)"):
+                st.write(f"**Parsed Name:** {t['name']}")
+                st.write(f"**Parsed Majors:** {', '.join(t['majors']) if t['majors'] else 'None'}")
+                st.write(f"**Parsed Minors:** {', '.join(t['minors']) if t.get('minors') else 'None'}")
+                st.write(f"**Parsed Certificates:** {', '.join(t['certificates']) if t.get('certificates') else 'None'}")
+                st.write(f"**Parsed Emphases:** {', '.join(t['emphases']) if t['emphases'] else 'None Detected (Showing Summaries)'}")
+        else:
+            st.info("No transcript attached. Advisor chat is in general guidance mode.")
 
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
