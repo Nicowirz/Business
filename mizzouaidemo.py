@@ -108,7 +108,7 @@ with title_col:
     st.markdown(
         f"""
         <h1 style='color:{MIZZOU_BLACK}; margin-bottom: 0.2rem;'>
-            University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor</span>
+            University of Missouri <span style='color:{MIZZOU_GOLD};'>Academic Advisor: ZouPath</span>
         </h1>
         """,
         unsafe_allow_html=True,
@@ -1689,7 +1689,7 @@ def main():
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Credits Completed", f"{int(t['hours'])}")
             col2.metric("Overall GPA", f"{t['gpa']}")
-            col3.metric("Remaining Requirements", f"{remaining_requirements}")
+            col3.metric("Core Courses Remaining", f"{remaining_requirements}")
             st.divider()
 
             if st.session_state.gap_analysis:
