@@ -1550,7 +1550,7 @@ def init_chat_session(transcript_data, eligible_courses):
     CRITICAL RULES:
     1. Prerequisite Checking: Before recommending a course, verify prerequisites using live course catalog lookup.
     3. Use Mizzou-themed language when appropriate (e.g., refer to 'myZou' or use 'Tiger' metaphors). Don't overdo it, but a little flavor can make the chat more engaging!
-    4. Exporting: When the student agrees on a final list of classes for next semester, export a CSV schedule for them. This should be a downloadable file named `mizzou_semester_schedule.csv` with two columns: "Course Code" and "Status" (set to "Planned").
+    4. Exporting: When the student agrees on a final list of classes for next semester, export a CSV schedule for them.
     5. Never mention internal function or tool names in your responses.
     6. Never recommend a course for a future semester if it is already marked In Progress in the student's record.
     7. Do not recommend a course and one of its prerequisites in the same semester plan.
